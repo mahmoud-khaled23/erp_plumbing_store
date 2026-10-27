@@ -1,0 +1,32 @@
+name: Backend and desktop compilation
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Test portable backend
+        working-directory: src-tauri
+        run: cargo test --locked --no-default-features
+      - name: Install Linux desktop development libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev
+      - name: Compile desktop adapter
+        working-directory: src-tauri
+        run: cargo check --locked --features desktop
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s tests -v
+      - run: python3 scripts/export_schema.py --check

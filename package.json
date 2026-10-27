@@ -1,0 +1,52 @@
+{
+  "name": "plumbing-store-erp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.21.1",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "pretest:ui": "bash scripts/build-ui-driver.sh",
+    "test:ui": "playwright test",
+    "check": "tsc --noEmit && python3 scripts/generate_types.py --check && python3 scripts/check_i18n.py",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "format": "prettier --write src tests/frontend tests/ui *.ts *.json *.js",
+    "format:check": "prettier --check src tests/frontend tests/ui *.ts *.json *.js"
+  },
+  "dependencies": {
+    "@fontsource-variable/cairo": "^5.2.0",
+    "@hookform/resolvers": "^5.2.0",
+    "@tanstack/react-table": "^8.21.3",
+    "@tauri-apps/api": "^2.11.0",
+    "jsbarcode": "^3.12.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-hook-form": "^7.62.0",
+    "recharts": "^3.1.2",
+    "zod": "^4.1.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@tauri-apps/cli": "^2.11.0",
+    "@types/jsbarcode": "^3.11.4",
+    "@types/node": "^22.18.0",
+    "@types/react": "^18.3.24",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "prettier": "^3.9.10",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.0",
+    "vitest": "4.1.12"
+  }
+}

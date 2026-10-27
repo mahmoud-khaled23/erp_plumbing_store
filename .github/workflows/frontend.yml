@@ -1,0 +1,33 @@
+name: Arabic frontend and SQLite workflows
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --global npm@11.21.1
+      - run: npm ci
+      - run: npm run check
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - name: Install UI test browser
+        run: npx playwright install --with-deps chrome
+      - name: Exercise React with the real Rust/SQLite backend
+        run: npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: frontend-failures
+          path: output/playwright-results/
+          retention-days: 7

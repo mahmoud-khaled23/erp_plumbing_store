@@ -1,0 +1,3 @@
+# Internal posting helpers pass the connection, actor and document explicitly in
+# addition to the business values. External commands use typed request DTOs.
+too-many-arguments-threshold = 10

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Local ERP window; application commands enforce authenticated permissions.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

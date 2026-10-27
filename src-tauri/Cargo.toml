@@ -1,0 +1,50 @@
+[package]
+name = "plumbing-erp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Offline Arabic plumbing-store ERP"
+publish = false
+
+[lib]
+name = "plumbing_erp"
+
+[[bin]]
+name = "plumbing-erp"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = []
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
+
+[dependencies]
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rusqlite = { version = "0.39", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+uuid = { version = "1", features = ["v4"] }
+csv = "1"
+calamine = "0.31"
+rust_xlsxwriter = "0.92"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tauri = { version = "2", features = ["protocol-asset"], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

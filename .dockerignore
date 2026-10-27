@@ -1,0 +1,9 @@
+.git
+output
+node_modules
+dist
+src-tauri/target
+__pycache__
+*.db
+*.db-wal
+*.db-shm
