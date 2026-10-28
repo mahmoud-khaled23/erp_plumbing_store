@@ -8,7 +8,7 @@ permissions:
 jobs:
   frontend:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +25,18 @@ jobs:
         run: npx playwright install --with-deps chrome
       - name: Exercise React with the real Rust/SQLite backend
         run: npm run test:ui
+      - name: Build isolated native PDF renderer
+        run: |
+          docker build -f docker/Dockerfile.check -t plumbing-erp-check:stage2 .
+          docker build -f docker/Dockerfile.print-check -t plumbing-erp-print:stage4 .
+      - name: Verify native PDF dimensions and barcode decoding
+        run: bash scripts/check-native-print.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arabic-print-review
+          path: output/pdf/*.pdf
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

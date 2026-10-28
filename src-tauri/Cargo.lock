@@ -2642,6 +2642,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "csv",
+ "gtk",
  "rand_core",
  "rusqlite",
  "rust_xlsxwriter",
@@ -2654,6 +2655,9 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "uuid",
+ "webkit2gtk",
+ "webview2-com",
+ "windows",
  "zip 2.6.1",
 ]
 

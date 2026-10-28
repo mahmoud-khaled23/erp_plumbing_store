@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { reportTypes, reportColumns } from './definitions';
 import type { Report } from '../../api/contracts';
 import { s, type Row } from '../../api/client';
 import { t } from '../../i18n';
@@ -17,108 +18,7 @@ import {
 } from '../../components/ui';
 import { DataTable, Pager } from '../../components/Table';
 import { PartyPicker } from '../../components/Pickers';
-export const reportTypes: Report[] = [
-  'trial_balance',
-  'income_statement',
-  'cash_flow',
-  'product_profit',
-  'category_profit',
-  'customer_profit',
-  'party_statement',
-  'receivables',
-  'payables',
-  'aging',
-  'vat',
-  'low_stock',
-  'valuation',
-  'cheques',
-  'purchase_orders',
-  'open_items',
-  'cash_shifts',
-];
-const columns: Record<Report, string[]> = {
-  trial_balance: [
-    'account_code',
-    'account_name',
-    'opening_minor',
-    'debit_minor',
-    'credit_minor',
-    'closing_minor',
-  ],
-  income_statement: ['account_code', 'account_name', 'account_kind', 'profit_signed_minor'],
-  cash_flow: [
-    'document_date',
-    'document_kind',
-    'cash_account_id',
-    'cash_in_minor',
-    'cash_out_minor',
-  ],
-  product_profit: ['name_ar', 'net_sales_minor', 'cogs_minor', 'gross_profit_minor'],
-  category_profit: ['name_ar', 'net_sales_minor', 'cogs_minor', 'gross_profit_minor'],
-  customer_profit: ['name_ar', 'net_sales_minor', 'cogs_minor', 'gross_profit_minor'],
-  party_statement: [
-    'document_date',
-    'document_number',
-    'document_kind',
-    'account_name',
-    'debit_minor',
-    'credit_minor',
-    'running_balance_minor',
-    'due_date',
-  ],
-  receivables: ['name_ar', 'balance_minor'],
-  payables: ['name_ar', 'balance_minor'],
-  aging: [
-    'code',
-    'name_ar',
-    'control_kind',
-    'not_due_minor',
-    'days_0_30_minor',
-    'days_31_60_minor',
-    'days_61_90_minor',
-    'over_90_minor',
-    'unapplied_credit_minor',
-    'net_due_minor',
-  ],
-  vat: ['input_vat_minor', 'output_vat_minor', 'net_vat_minor'],
-  low_stock: ['code', 'name_ar', 'warehouse_name', 'quantity_micros', 'min_stock_micros'],
-  valuation: ['name_ar', 'warehouse_id', 'quantity_micros', 'value_minor'],
-  cheques: [
-    'cheque_number',
-    'bank_name',
-    'party_id',
-    'due_date',
-    'direction',
-    'amount_minor',
-    'status',
-  ],
-  purchase_orders: [
-    'number',
-    'party_id',
-    'document_date',
-    'ordered_micros',
-    'accepted_micros',
-    'progress',
-  ],
-  open_items: [
-    'document_number',
-    'document_kind',
-    'document_date',
-    'due_date',
-    'control_kind',
-    'original_signed_minor',
-    'outstanding_signed_minor',
-  ],
-  cash_shifts: [
-    'id',
-    'cash_account_id',
-    'opened_at',
-    'closed_at',
-    'opening_balance_minor',
-    'expected_balance_minor',
-    'counted_balance_minor',
-  ],
-};
+import { openPrint } from '../printing/store';
 export function ReportView({
   initial = 'trial_balance',
   partyId,
@@ -201,6 +101,20 @@ export function ReportView({
         >
           {t('runReport')}
         </Button>
+        <Button
+          disabled={result.loading || !!result.error}
+          onClick={() =>
+            openPrint({
+              type: 'report',
+              report: type,
+              from: range.from,
+              to: range.to,
+              party_id: party,
+            })
+          }
+        >
+          {t('printReport')}
+        </Button>
       </div>
       {['party_statement', 'aging', 'open_items'].includes(type) && !partyId && (
         <div className="mb-4 flex max-w-lg items-end gap-3">
@@ -249,7 +163,7 @@ export function ReportView({
               />
             </div>
           )}
-          <DataTable rows={rows} columns={columns[type]} actions={actions} onRow={onRow} />
+          <DataTable rows={rows} columns={reportColumns[type]} actions={actions} onRow={onRow} />
           <Pager
             page={page}
             canNext={rows.length === 100}

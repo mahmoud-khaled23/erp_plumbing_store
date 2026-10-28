@@ -5,6 +5,7 @@ Run: python3 -m unittest discover -s tests -v
 """
 from pathlib import Path
 from datetime import date, timedelta
+from contextlib import closing
 import hashlib
 import sqlite3
 import tempfile
@@ -147,8 +148,8 @@ class SchemaTest(unittest.TestCase):
 
     def test_file_database_wal_and_connection_settings(self):
         with tempfile.TemporaryDirectory() as folder:
-            with sqlite3.connect(str(Path(folder) / "test.db")) as db:
-                execute_sql(db, (ROOT / "src-tauri/db/connection.sql").read_text())
+            with closing(sqlite3.connect(str(Path(folder) / "test.db"))) as db:
+                execute_sql(db, (ROOT / "src-tauri/db/connection.sql").read_text(encoding="utf-8"))
                 self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
                 self.assertEqual(db.execute("PRAGMA foreign_keys").fetchone()[0], 1)
                 self.assertEqual(db.execute("PRAGMA synchronous").fetchone()[0], 2)
@@ -426,7 +427,7 @@ class SchemaTest(unittest.TestCase):
         _, credit = self.journal(payment, [(101, 100, 0), (110, 0, 100)])
         self.db.execute("INSERT INTO settlements(document_id, debit_line_id, credit_line_id, amount_minor) VALUES (?, ?, ?, 100)", (payment, line_ids[-1], credit))
         self.finish(payment)
-        query = (ROOT / "src-tauri/queries/aging.sql").read_text()
+        query = (ROOT / "src-tauri/queries/aging.sql").read_text(encoding="utf-8")
         row = self.db.execute(query, {"as_of": as_of.isoformat()}).fetchone()
         self.assertEqual(row[4:], (100, 200, 200, 200, 100, 0, 800))
         next_day = self.db.execute(query, {"as_of": "2026-10-28"}).fetchone()

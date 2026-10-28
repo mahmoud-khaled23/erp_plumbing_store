@@ -1,0 +1,379 @@
+.print-dialog {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #e8eded;
+  color: #172d32;
+  overflow: auto;
+}
+.print-dialog::backdrop {
+  background: #183133aa;
+}
+.print-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: white;
+  border-bottom: 1px solid #d5dedf;
+  padding: 16px 24px;
+  box-shadow: 0 2px 10px #1831330a;
+}
+.print-toolbar-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.print-toolbar-controls h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-inline-end: auto;
+}
+.print-toolbar-controls .field {
+  min-width: 100px;
+}
+.print-toolbar-controls .field .input {
+  max-width: 190px;
+}
+.print-hint {
+  font-size: 12px;
+  color: #5b6e73;
+  margin-top: 10px;
+}
+.print-inline-error {
+  background: #fff0f0;
+  color: #8e2525;
+  border: 1px solid #edc9c9;
+  padding: 12px;
+  margin: 12px 0;
+}
+.print-pages {
+  padding: 24px;
+  font-family: 'Cairo Variable', sans-serif;
+  font-size: 9pt;
+  line-height: 1.55;
+  color: #14292d;
+  direction: rtl;
+}
+.print-page {
+  box-sizing: border-box;
+  width: var(--paper-width, 210mm);
+  /* WebKit rounds physical pages down; reserve half a millimetre to avoid a blank page. */
+  height: calc(var(--paper-height, 297mm) - 0.5mm);
+  padding: var(--paper-padding, 12mm);
+  background: white;
+  margin: 0 auto 24px;
+  position: relative;
+  box-shadow: 0 2px 15px #1f3b3b17;
+  overflow: visible;
+}
+.print-header {
+  padding-bottom: 4mm;
+}
+.print-brand-row {
+  display: flex;
+  gap: 6mm;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 3mm;
+  border-bottom: 1px solid #25464b;
+}
+.print-brand {
+  display: flex;
+  gap: 3mm;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+}
+.print-brand img {
+  width: 18mm;
+  height: 18mm;
+  object-fit: contain;
+}
+.print-brand h1 {
+  font-size: 17pt;
+  font-weight: 800;
+  margin: 0 0 1mm;
+  line-height: 1.5;
+}
+.print-brand p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 8.5pt;
+}
+.print-title {
+  text-align: end;
+  max-width: 42%;
+  flex-shrink: 0;
+}
+.print-title h2 {
+  font-size: 15pt;
+  font-weight: 800;
+  margin: 0 0 1mm;
+}
+.print-title p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.print-metadata {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1mm 5mm;
+  padding-top: 3mm;
+}
+.print-metadata > div {
+  display: flex;
+  gap: 2mm;
+  align-items: baseline;
+}
+.print-metadata dt {
+  color: #4c6065;
+  flex-shrink: 0;
+}
+.print-metadata dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.print-warning {
+  border: 1.5px solid #8c3333;
+  color: #7d2828;
+  font-weight: 800;
+  text-align: center;
+  padding: 2mm;
+  margin-top: 3mm;
+}
+.print-table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+  margin: 0;
+  font-size: inherit;
+}
+.print-table th,
+.print-table td {
+  border-bottom: 1px solid #d6dedf;
+  padding: 2mm 1.5mm;
+  vertical-align: top;
+  text-align: start;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.print-table th {
+  font-weight: 750;
+  background: #eff3f3;
+  color: #183438;
+  border-bottom: 1px solid #91a7aa;
+}
+.print-table .print-section-title {
+  background: white;
+  padding-top: 4mm;
+  font-size: 10pt;
+  border-bottom: 0;
+}
+.print-cell-text {
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+.print-grand-total td {
+  border-top: 1.5px solid #25464b;
+  font-size: 12pt;
+  font-weight: 800;
+}
+.print-footer {
+  position: absolute;
+  bottom: var(--paper-padding, 12mm);
+  inset-inline: var(--paper-padding, 12mm);
+  border-top: 1px solid #aebfc1;
+  padding-top: 2mm;
+  display: flex;
+  justify-content: space-between;
+  gap: 5mm;
+  font-size: 8pt;
+}
+.print-footer > span {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.print-footer > span:last-child {
+  flex-shrink: 0;
+}
+.print-measure {
+  position: fixed;
+  left: -20000px;
+  top: 0;
+  visibility: hidden;
+  height: auto;
+  margin: 0;
+  box-shadow: none;
+}
+.print-measure .print-footer {
+  position: static;
+}
+.print-thermal80 {
+  font-size: 8.5pt;
+}
+.print-thermal80 .print-brand-row {
+  display: block;
+  text-align: center;
+}
+.print-thermal80 .print-brand {
+  display: block;
+}
+.print-thermal80 .print-brand img {
+  margin: 0 auto 2mm;
+}
+.print-thermal80 .print-brand h1 {
+  font-size: 13pt;
+}
+.print-thermal80 .print-title {
+  max-width: none;
+  text-align: center;
+  padding-top: 2mm;
+}
+.print-thermal80 .print-title h2 {
+  font-size: 12pt;
+}
+.print-thermal80 .print-metadata {
+  grid-template-columns: 1fr;
+}
+.print-thermal80 .print-metadata dt {
+  flex-shrink: 1;
+}
+.print-thermal80 .print-table th,
+.print-thermal80 .print-table td {
+  padding: 1.8mm 0.7mm;
+}
+.print-thermal80 .print-table .print-section-title {
+  padding-top: 3mm;
+}
+.print-thermal80 .print-footer {
+  display: block;
+  text-align: center;
+  font-size: 7pt;
+}
+.print-thermal80 .print-footer span {
+  display: block;
+}
+.print-landscape {
+  font-size: 8pt;
+}
+.print-labels .label-sheet {
+  width: 210mm;
+  height: 296.5mm;
+  padding: 10mm;
+  display: grid;
+  grid-template-columns: repeat(3, 62mm);
+  grid-template-rows: repeat(8, 32mm);
+  gap: 2mm;
+  align-content: start;
+}
+.barcode-label {
+  box-sizing: border-box;
+  width: 62mm;
+  height: 32mm;
+  overflow: hidden;
+  border: 0.2mm dashed #c8d0d1;
+  padding: 1.5mm 2mm;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  text-align: center;
+  font-size: 7pt;
+  line-height: 1.3;
+}
+.label-store {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 6pt;
+}
+.label-name {
+  font-size: 7.5pt;
+  font-weight: 800;
+  max-height: 7mm;
+  line-height: 1.25;
+  flex-shrink: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.label-detail {
+  display: flex;
+  gap: 2mm;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  white-space: nowrap;
+  font-size: 7pt;
+  margin: 1mm 0 0.5mm;
+  flex-shrink: 0;
+}
+.barcode-label svg {
+  max-width: 54mm;
+  flex-shrink: 0;
+}
+.label-digits {
+  font-family: monospace;
+  font-size: 8pt;
+  line-height: 1.2;
+}
+@media print {
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+  body > :not(#erp-print-root) {
+    display: none !important;
+  }
+  #erp-print-root,
+  .print-dialog {
+    display: block !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+  .print-dialog::backdrop,
+  .print-toolbar,
+  .print-measure {
+    display: none !important;
+  }
+  .print-pages {
+    padding: 0;
+  }
+  .print-page {
+    margin: 0;
+    box-shadow: none;
+    break-after: page;
+    page-break-after: always;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .print-table tr {
+    break-inside: avoid;
+  }
+  .barcode-label {
+    border-color: transparent;
+  }
+}

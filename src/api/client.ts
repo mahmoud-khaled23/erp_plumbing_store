@@ -1,7 +1,7 @@
 import { invoke, isTauri, convertFileSrc } from '@tauri-apps/api/core';
 import { appLocalDataDir, join } from '@tauri-apps/api/path';
 import { z } from 'zod';
-import type { Query, Mutation, Setup, Product } from './contracts';
+import type { Query, Mutation, Setup, Product, PrintSource, PrintPaper } from './contracts';
 import { t } from '../i18n';
 
 const rowSchema = z.record(z.string(), z.string().nullable());
@@ -45,6 +45,17 @@ const documentSchema = z.object({
   returned: rowsSchema.default([]),
 });
 export type DocumentDetail = z.infer<typeof documentSchema>;
+const printSnapshotSchema = z.object({
+  document: documentSchema.nullable(),
+  rows: rowsSchema,
+  opening: rowsSchema,
+  context: rowsSchema,
+  store: rowSchema,
+  preferences: rowSchema,
+  references: z.record(z.string(), rowsSchema),
+  generated_at: z.string(),
+});
+export type PrintSnapshot = z.infer<typeof printSnapshotSchema>;
 const productSchema = z.object({
   product: rowsSchema,
   units: rowsSchema,
@@ -74,19 +85,21 @@ const cashDeskSchema = z.object({ shifts: rowsSchema, balances: rowsSchema });
 export type ReportData = Row[] | { rows: Row[]; opening: Row[] };
 export type QueryResult<Q extends Query> = Q extends { type: 'bootstrap' }
   ? Bootstrap
-  : Q extends { type: 'product' }
-    ? ProductDetail
-    : Q extends { type: 'document' }
-      ? DocumentDetail
-      : Q extends { type: 'dashboard' }
-        ? DashboardData
-        : Q extends { type: 'users' }
-          ? UsersData
-          : Q extends { type: 'report' }
-            ? ReportData
-            : Q extends { type: 'cash_desk' }
-              ? z.infer<typeof cashDeskSchema>
-              : Row[];
+  : Q extends { type: 'print_snapshot' }
+    ? PrintSnapshot
+    : Q extends { type: 'product' }
+      ? ProductDetail
+      : Q extends { type: 'document' }
+        ? DocumentDetail
+        : Q extends { type: 'dashboard' }
+          ? DashboardData
+          : Q extends { type: 'users' }
+            ? UsersData
+            : Q extends { type: 'report' }
+              ? ReportData
+              : Q extends { type: 'cash_desk' }
+                ? z.infer<typeof cashDeskSchema>
+                : Row[];
 export interface Operation {
   id?: string;
   revision?: string;
@@ -139,21 +152,23 @@ export const api = {
   async query<Q extends Query>(query: Q): Promise<QueryResult<Q>> {
     const result = await call<unknown>('erp_query', { query });
     const schema =
-      query.type === 'bootstrap'
-        ? bootstrapSchema
-        : query.type === 'document'
-          ? documentSchema
-          : query.type === 'product'
-            ? productSchema
-            : query.type === 'dashboard'
-              ? dashboardSchema
-              : query.type === 'users'
-                ? usersSchema
-                : query.type === 'cash_desk'
-                  ? cashDeskSchema
-                  : query.type === 'report'
-                    ? z.union([rowsSchema, z.object({ rows: rowsSchema, opening: rowsSchema })])
-                    : rowsSchema;
+      query.type === 'print_snapshot'
+        ? printSnapshotSchema
+        : query.type === 'bootstrap'
+          ? bootstrapSchema
+          : query.type === 'document'
+            ? documentSchema
+            : query.type === 'product'
+              ? productSchema
+              : query.type === 'dashboard'
+                ? dashboardSchema
+                : query.type === 'users'
+                  ? usersSchema
+                  : query.type === 'cash_desk'
+                    ? cashDeskSchema
+                    : query.type === 'report'
+                      ? z.union([rowsSchema, z.object({ rows: rowsSchema, opening: rowsSchema })])
+                      : rowsSchema;
     const parsed = schema.safeParse(result);
     if (!parsed.success) throw new ApiError('contract', t('unexpected'));
     return parsed.data as QueryResult<Q>;
@@ -184,6 +199,10 @@ export const api = {
   resetPassword: (userId: string, password: string) =>
     call('erp_reset_password', { userId, password }),
   file: (action: FileAction) => call<Operation>('erp_file', { action }),
+  frontendReady: () => (isTauri() ? call<void>('erp_frontend_ready') : Promise.resolve()),
+  print: (source: PrintSource, paper: PrintPaper) => call<void>('erp_print', { source, paper }),
+  exportPdf: (source: PrintSource, paper: PrintPaper) =>
+    call<Operation>('erp_export_pdf', { source, paper }),
   importProducts: (token: string, replace: boolean) =>
     call<Operation>('erp_import_apply', { token, replace }),
   importOpening: (token: string, balances: boolean, date: string, warehouseId: string | null) =>

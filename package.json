@@ -14,17 +14,20 @@
     "test": "vitest run",
     "pretest:ui": "bash scripts/build-ui-driver.sh",
     "test:ui": "playwright test",
-    "check": "tsc --noEmit && python3 scripts/generate_types.py --check && python3 scripts/check_i18n.py",
+    "check": "tsc --noEmit && node scripts/python.mjs scripts/generate_types.py --check && node scripts/python.mjs scripts/check_i18n.py",
     "tauri": "tauri",
     "desktop": "tauri dev",
     "format": "prettier --write src tests/frontend tests/ui *.ts *.json *.js",
-    "format:check": "prettier --check src tests/frontend tests/ui *.ts *.json *.js"
+    "format:check": "prettier --check src tests/frontend tests/ui *.ts *.json *.js",
+    "release:prepare": "node scripts/python.mjs scripts/generate_installer.py --check && npm run check && npm run build",
+    "build:windows": "tauri build --target x86_64-pc-windows-msvc --ci -- --locked",
+    "verify:release": "node scripts/python.mjs scripts/verify_release.py"
   },
   "dependencies": {
     "@fontsource-variable/cairo": "^5.2.0",
     "@hookform/resolvers": "^5.2.0",
     "@tanstack/react-table": "^8.21.3",
-    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/api": "~2.11.0",
     "jsbarcode": "^3.12.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",

@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tauri::State;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+pub mod printing;
+pub mod startup;
 
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,

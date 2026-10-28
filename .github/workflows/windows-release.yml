@@ -1,0 +1,58 @@
+name: Windows NSIS candidate
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TARGET_DIR: ${{ github.workspace }}/output/windows-target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned build tools
+        run: |
+          npm install --global npm@11.21.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add x86_64-pc-windows-msvc --toolchain 1.95.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm test
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/export_schema.py --check
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --features desktop --all-targets -- -D warnings
+      - name: Parse and test PowerShell helpers
+        run: ./scripts/check-powershell.ps1
+      - name: Build the actual offline NSIS installer
+        run: npm run build:windows
+      - name: Verify PE architecture, static CRT, SHA-256 and installer size
+        run: python scripts/verify_release.py --target-dir output/windows-target --origin windows-native
+      - name: Exercise installation, native startup, reinstallation and data retention
+        run: |
+          $setup = Get-ChildItem 'output/windows-target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe'
+          if ($setup.Count -ne 1) { throw 'Expected one NSIS installer.' }
+          ./scripts/smoke-windows.ps1 -Installer $setup.FullName -DisposableProfile
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-nsis-candidate
+          path: |
+            output/releases/
+            output/windows-smoke/
+          retention-days: 14

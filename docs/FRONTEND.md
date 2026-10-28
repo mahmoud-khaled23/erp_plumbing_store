@@ -19,8 +19,9 @@ npm run desktop
 the Arabic desktop-required screen, because there is no Tauri command transport there.
 `npm run build` generates bundled frontend assets in `dist/`; it does not produce an
 installer. The Tauri configuration enables the `desktop` Cargo feature automatically.
-The installed Windows application will use WebView2 and local SQLite, without Node.js
-or a web server. Windows packaging and native acceptance remain later deliverables.
+The installed Windows application uses WebView2 and local SQLite, without Node.js
+or a web server. A Windows candidate has been built from Fedora; native Windows acceptance
+remains pending. See [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
 
 ## Screens and workflows
 
@@ -38,9 +39,10 @@ or a web server. Windows packaging and native acceptance remain later deliverabl
 | Settings | Store/currency/digits/VAT, print preferences, master data, sequences, fiscal locks, backups, restore, opening imports |
 | Users / audit | Users, roles, active status, password reset, paginated audit trail with expandable Arabic field labels |
 
-Print/PDF actions and barcode-label sheets are stage 4. This stage provides barcode
-previews and the saved print preferences. Final Arabic user instructions and Windows
-installer commands belong to stages 5–6.
+Stage 4 adds document/report/stock-card print previews, native PDF export and barcode
+label sheets. See [PRINTING.md](PRINTING.md) for templates and printer instructions.
+The [Arabic user guide](../README_AR.md) and [Windows build commands](WINDOWS_RELEASE.md)
+complete the operating and release documentation.
 
 ## Navigation and precision
 
@@ -98,6 +100,7 @@ protect saved drafts/products/settings from stale writes. Posted documents are i
 | `src/features/documents/` | Shared invoice/receipt/order editor, document history, returns, source selection |
 | `src/features/inventory/`, `purchasing/` | Stock, counts, warehouse settings and landed costs |
 | `src/features/finance/`, `reports/` | Financial operations and paginated accounting/inventory reports |
+| `src/features/printing/` | Lazy print preview, measured Arabic templates, native actions and barcode sheets |
 | `src/features/settings/` | Store/master settings, periods, backup/import, users and audit |
 | `src/i18n/`, `src/styles.css` | Arabic dictionary and shared RTL styling |
 | `scripts/generate_types.py`, `check_i18n.py` | Rust/TypeScript contract drift and Arabic-label checks |
@@ -131,23 +134,25 @@ npm run test:ui
 ```
 
 The `pretest:ui` script builds a test-only Rust driver in the pinned Docker image. Each
-test starts a separate driver and temporary database. Playwright replaces only the IPC
+test starts a separate driver and temporary database. A dedicated Vite server on
+`127.0.0.1:5179` keeps the tests separate from a running Tauri session on port 5173. Playwright replaces only the IPC
 transport: React invokes actual Rust setup, authentication, query and transaction
 services. Neither the driver nor Playwright is included in the desktop installer.
-These tests do not open native file dialogs or exercise WebKitGTK/WebView2.
+These browser tests do not open native file dialogs or exercise WebKitGTK/WebView2.
+The separate stage 4 [native PDF check](PRINTING.md) exercises WebKitGTK export.
 
 The supplied GitHub workflow installs its browser using
 `npx playwright install --with-deps chrome` on Ubuntu. On Fedora use an installed Chrome
 and its system dependencies. See the official [Playwright browser documentation](https://playwright.dev/docs/browsers).
 
-Recorded locally: 10 frontend unit tests, 8 Chrome integration workflows, 27 Rust tests
-and 28 schema tests passed. Integration covers first run/offline font, fractional sale
+Recorded locally through stage 5: 12 frontend unit tests, 10 Chrome integration workflows,
+29 Rust tests and 32 Python schema/release tests passed. Integration covers first run/offline font, fractional sale
 and return, unit barcode/editing and draft guard, partial receiving/invoice matching,
 stocktake, every module route, queued scans/session renewal, and balanced advance/expense
 journals. Dashboard/POS screenshots are generated in `output/` for visual review.
 Frontend type checking, build, formatting and Rust Clippy also pass. CI configuration is
 supplied, but no remote CI run or Windows execution is claimed.
 
-The <20 MB installer, <150 MB idle RAM and <2 s startup are acceptance targets, not
-measurements inferred from frontend bundle size. They require the completed application
-and a documented Windows machine.
+The actual NSIS installer measured 3,713,278 bytes. Idle RAM below 150 MB and startup
+below 2 seconds remain acceptance targets requiring a documented Windows machine;
+they are not inferred from frontend bundle size.

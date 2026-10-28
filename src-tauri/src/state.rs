@@ -249,6 +249,24 @@ impl App {
         tx.commit()?;
         Ok(result)
     }
+    /// Record an authorized output request, not a claim that paper was printed.
+    pub fn prepare_print(&self, source: PrintSource, pdf: bool) -> Result<()> {
+        let mut inner = self.lock()?;
+        let actor = Self::actor(&mut inner)?;
+        let tx = inner.db.transaction()?;
+        services::printing::snapshot(&tx, &actor, &source)?;
+        let action = if pdf {
+            "pdf_export_requested"
+        } else {
+            "print_requested"
+        };
+        tx.execute(
+            "INSERT INTO audit_log(user_id,action,entity_type,after_json) VALUES (?1,?2,'print',?3)",
+            params![actor.user_id, action, serde_json::to_string(&source)?],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn query(&self, query: Query) -> Result<Value> {
         let mut inner = self.lock()?;
         if matches!(query, Query::Bootstrap) {

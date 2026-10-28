@@ -1,9 +1,9 @@
 # Arabic plumbing-store ERP — architecture contract
 
-Stage 1 delivers the complete relational schema, reference data, database constraints,
-reporting views and schema contract tests. The Rust application, React screens, print
-templates and Windows installer are subsequent stages. This document describes their
-implementation contract; it does not claim they already exist.
+This document describes the implemented database, Rust services, React screens, printing
+and Windows packaging. All six source/documentation stages are delivered. The recorded
+installer is a release candidate: Windows execution, physical printer acceptance and
+runtime performance remain unverified. See [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
 
 ## 1. Deployment and operating assumptions
 
@@ -21,8 +21,8 @@ Tauri documents approximately 127 MB of additional size for the bundled offline
 installer. A universally self-contained installer under 20 MB is consequently not a
 feasible requirement for this stack. [Tauri Windows installer documentation](https://v2.tauri.app/distribute/windows-installer/)
 
-Installer <20 MB, total idle private working set <150 MB, and cold start <2 seconds
-are release acceptance targets, not measured results at this stage. Memory measurement
+The recorded NSIS installer is 3,713,278 bytes, below the 20 MB target. Total idle private
+working set below 150 MB and cold start below 2 seconds remain unmeasured. Memory measurement
 includes the application and its WebView2 child processes. Cold start is measured from
 process creation to an interactive login screen on a documented reference PC, including
 the startup database check. First-run setup, upgrades and restores are measured separately.
@@ -49,15 +49,16 @@ flowchart TD
 ```
 
 Commands accept typed request DTOs and return typed results or structured errors:
-`code`, Arabic `message`, optional field errors and a retryable flag. They do not accept
+`code`, Arabic `message` and a `retryable` flag. They do not accept
 SQL, account mappings, arbitrary application paths or caller-supplied user identities.
 Services derive the acting user from an in-memory session and check permissions again
 inside the command boundary. Hiding a navigation item does not grant or revoke access.
 
-Database writes use a single owned writer connection and `BEGIN IMMEDIATE`. Synchronous
-rusqlite operations run off the UI thread. Reports use at most two lazy read connections
-with smaller caches and bounded result sets. The writer also owns checkpoints. A
-multi-query report reads one snapshot transaction so totals and detail rows agree.
+Database operations use a single mutex-owned connection. Writes use `BEGIN IMMEDIATE`;
+queries and multi-query reports use a read transaction on that same connection so totals
+and detail rows share a snapshot. Synchronous rusqlite work runs off the UI thread.
+Result sizes are bounded; there is no additional read-connection pool. Connection pragmas
+configure an 8 MiB page cache, FULL synchronization and automatic WAL checkpoints.
 
 The frontend contains no database access and cannot calculate authoritative postings.
 It can preview totals with BigInt, but Rust recomputes every amount before committing.
@@ -66,92 +67,130 @@ engine is shipped in the application.
 
 ## 3. Final folder structure
 
-The following is the planned complete application structure. Files delivered in this
-stage are listed separately in the repository README. Future-stage paths here are design
-decisions, not empty files or runnable scaffolding.
+This is the actual source tree at the stage 6 handoff. Dependencies, generated build
+output, local databases and Git internals are excluded; all files shown exist.
 
 ```text
 erp_plumbing_store/
-├── README.md
-├── README_AR.md
-├── package.json
-├── package-lock.json
-├── index.html
-├── tsconfig.json
-├── tsconfig.node.json
-├── vite.config.ts
-├── tailwind.config.ts
-├── postcss.config.cjs
-├── eslint.config.js
+├── .cargo/
+│   └── config.toml
+├── .github/
+│   └── workflows/
+│       ├── backend.yml
+│       ├── frontend.yml
+│       └── windows-release.yml
+├── docker/
+│   ├── Dockerfile.check
+│   ├── Dockerfile.installer-check
+│   ├── Dockerfile.print-check
+│   ├── Dockerfile.tools
+│   ├── Dockerfile.windows-check
+│   └── Dockerfile.windows-release
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── BACKEND_API.md
+│   ├── DEVELOPMENT.md
+│   ├── FRONTEND.md
+│   ├── PRINTING.md
+│   ├── WINDOWS_RELEASE.md
+│   └── schema.sql
 ├── public/
-│   └── fonts/
-│       ├── Cairo-Variable.woff2
-│       └── OFL.txt
+│   └── licenses/
+│       └── Cairo-OFL.txt
+├── scripts/
+│   ├── build-ui-driver.sh
+│   ├── build-windows-container.sh
+│   ├── build-windows-fedora.sh
+│   ├── check-installed-store.py
+│   ├── check-native-print.sh
+│   ├── check-powershell.ps1
+│   ├── check_i18n.py
+│   ├── export_schema.py
+│   ├── generate_installer.py
+│   ├── generate_types.py
+│   ├── measure-windows.ps1
+│   ├── python.mjs
+│   ├── render-native-print.sh
+│   ├── smoke-windows.ps1
+│   ├── test-backend.sh
+│   ├── verify_print_pdfs.py
+│   ├── verify_release.py
+│   └── windows-common.ps1
 ├── src/
-│   ├── main.tsx
+│   ├── api/
+│   │   ├── client.ts
+│   │   └── contracts.ts
 │   ├── app/
 │   │   ├── App.tsx
-│   │   ├── routes.tsx
-│   │   ├── AppShell.tsx
-│   │   ├── Sidebar.tsx
-│   │   ├── ErrorBoundary.tsx
-│   │   └── styles.css
+│   │   ├── dialogs.ts
+│   │   └── store.ts
+│   ├── components/
+│   │   ├── AuditValue.tsx
+│   │   ├── Form.tsx
+│   │   ├── ImportDialog.tsx
+│   │   ├── Payments.tsx
+│   │   ├── Pickers.tsx
+│   │   ├── ProductImage.tsx
+│   │   ├── Table.tsx
+│   │   └── ui.tsx
+│   ├── features/
+│   │   ├── auth/
+│   │   │   └── AuthPage.tsx
+│   │   ├── dashboard/
+│   │   │   └── DashboardPage.tsx
+│   │   ├── documents/
+│   │   │   ├── DocumentDetail.tsx
+│   │   │   ├── DocumentEditor.tsx
+│   │   │   ├── DocumentsPage.tsx
+│   │   │   ├── SourcePicker.tsx
+│   │   │   └── calculation.ts
+│   │   ├── finance/
+│   │   │   ├── FinanceForms.tsx
+│   │   │   └── FinancePage.tsx
+│   │   ├── inventory/
+│   │   │   ├── InventoryPage.tsx
+│   │   │   └── StockRules.tsx
+│   │   ├── parties/
+│   │   │   └── PartiesPage.tsx
+│   │   ├── printing/
+│   │   │   ├── Pages.tsx
+│   │   │   ├── PrintHost.tsx
+│   │   │   ├── model.ts
+│   │   │   ├── paginate.ts
+│   │   │   ├── print.css
+│   │   │   └── store.ts
+│   │   ├── products/
+│   │   │   └── ProductsPage.tsx
+│   │   ├── purchasing/
+│   │   │   └── LandedCost.tsx
+│   │   ├── reports/
+│   │   │   ├── ReportsPage.tsx
+│   │   │   └── definitions.ts
+│   │   └── settings/
+│   │       ├── MasterManager.tsx
+│   │       ├── OpeningImports.tsx
+│   │       ├── SettingsPage.tsx
+│   │       ├── UsersPage.tsx
+│   │       └── settingsModel.ts
 │   ├── i18n/
 │   │   ├── ar.json
 │   │   └── index.ts
 │   ├── lib/
-│   │   ├── api.ts
-│   │   ├── contracts.ts
-│   │   ├── money.ts
-│   │   ├── quantity.ts
-│   │   ├── format.ts
-│   │   └── shortcuts.ts
-│   ├── stores/
-│   │   ├── session.ts
-│   │   ├── settings.ts
-│   │   └── pos.ts
-│   ├── components/
-│   │   ├── DataTable.tsx
-│   │   ├── FormField.tsx
-│   │   ├── DecimalInput.tsx
-│   │   ├── DateInput.tsx
-│   │   ├── Dialog.tsx
-│   │   ├── ConfirmDialog.tsx
-│   │   ├── ToastProvider.tsx
-│   │   ├── Pagination.tsx
-│   │   ├── Barcode.tsx
-│   │   ├── PartyPicker.tsx
-│   │   └── ProductPicker.tsx
-│   ├── features/
-│   │   ├── auth/{LoginScreen.tsx,ChangePasswordDialog.tsx}
-│   │   ├── setup/{FirstRunWizard.tsx,OpeningImport.tsx}
-│   │   ├── dashboard/{DashboardScreen.tsx,DashboardCharts.tsx}
-│   │   ├── products/{ProductsScreen.tsx,ProductForm.tsx,CategoriesScreen.tsx,ProductUnitsEditor.tsx,ProductImport.tsx,LabelsDialog.tsx}
-│   │   ├── inventory/{InventoryScreen.tsx,TransfersScreen.tsx,AdjustmentForm.tsx,StocktakeScreen.tsx,StockCardScreen.tsx,ValuationScreen.tsx}
-│   │   ├── sales/{SalesScreen.tsx,PosScreen.tsx,SaleReturnScreen.tsx,QuotationsScreen.tsx,PaymentDialog.tsx,HeldSalesDialog.tsx}
-│   │   ├── purchases/{PurchasesScreen.tsx,PurchaseOrderScreen.tsx,PurchaseInvoiceScreen.tsx,PurchaseReturnScreen.tsx,LandedCostsDialog.tsx}
-│   │   ├── receiving/{ReceivingScreen.tsx,GoodsReceiptForm.tsx}
-│   │   ├── parties/{PartiesScreen.tsx,PartyForm.tsx,StatementScreen.tsx,AgingScreen.tsx}
-│   │   ├── finance/{FinanceScreen.tsx,VoucherForm.tsx,ChequesScreen.tsx,ExpensesScreen.tsx,JournalScreen.tsx,CashAccountsScreen.tsx,ShiftScreen.tsx}
-│   │   ├── reports/{ReportsScreen.tsx,ReportFilters.tsx,ReportTable.tsx}
-│   │   └── settings/{SettingsScreen.tsx,UsersScreen.tsx,PermissionsScreen.tsx,AuditScreen.tsx,BackupScreen.tsx,FiscalPeriodsScreen.tsx}
-│   └── print/
-│       ├── PrintRoot.tsx
-│       ├── InvoiceA4.tsx
-│       ├── Receipt80.tsx
-│       ├── GoodsReceivedNote.tsx
-│       ├── ReportPrint.tsx
-│       ├── BarcodeLabels.tsx
-│       └── print.css
+│   │   ├── hooks.ts
+│   │   └── numbers.ts
+│   ├── main.tsx
+│   └── styles.css
 ├── src-tauri/
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   ├── build.rs
-│   ├── tauri.conf.json
-│   ├── capabilities/main.json
-│   ├── windows/hooks.nsh
-│   ├── icons/{icon.ico,icon.png}
-│   ├── db/connection.sql
+│   ├── capabilities/
+│   │   └── main.json
+│   ├── db/
+│   │   └── connection.sql
+│   ├── examples/
+│   │   ├── native_print_check.rs
+│   │   └── ui_driver.rs
+│   ├── icons/
+│   │   ├── icon.ico
+│   │   └── icon.png
 │   ├── migrations/
 │   │   ├── 0001_foundation.sql
 │   │   ├── 0002_documents.sql
@@ -159,38 +198,84 @@ erp_plumbing_store/
 │   │   ├── 0004_guards.sql
 │   │   ├── 0005_detail_guards.sql
 │   │   ├── 0006_views.sql
-│   │   └── 0007_reference_data.sql
-│   ├── queries/aging.sql
-│   ├── seeds/demo_products.csv
+│   │   ├── 0007_reference_data.sql
+│   │   └── 0008_cost_attribution.sql
+│   ├── queries/
+│   │   └── aging.sql
+│   ├── seeds/
+│   │   └── demo_products.csv
 │   ├── src/
-│   │   ├── main.rs
-│   │   ├── lib.rs
-│   │   ├── state.rs
+│   │   ├── commands/
+│   │   │   ├── mod.rs
+│   │   │   ├── printing.rs
+│   │   │   └── startup.rs
+│   │   ├── db/
+│   │   │   └── mod.rs
+│   │   ├── models/
+│   │   │   ├── arithmetic.rs
+│   │   │   ├── mod.rs
+│   │   │   └── requests.rs
+│   │   ├── services/
+│   │   │   ├── administration.rs
+│   │   │   ├── auth.rs
+│   │   │   ├── catalog.rs
+│   │   │   ├── costing.rs
+│   │   │   ├── documents.rs
+│   │   │   ├── files.rs
+│   │   │   ├── finance.rs
+│   │   │   ├── inventory.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── printing.rs
+│   │   │   ├── reporting.rs
+│   │   │   └── returns.rs
 │   │   ├── error.rs
-│   │   ├── db/{mod.rs,connection.rs,migrations.rs,repositories.rs}
-│   │   ├── models/{mod.rs,ids.rs,money.rs,quantity.rs,auth.rs,catalog.rs,documents.rs,inventory.rs,accounting.rs,reports.rs,settings.rs}
-│   │   ├── services/{mod.rs,auth.rs,catalog.rs,costing.rs,posting.rs,inventory.rs,sales.rs,purchases.rs,receiving.rs,parties.rs,finance.rs,reports.rs,settings.rs,backup.rs,imports.rs,printing.rs,setup.rs}
-│   │   └── commands/{mod.rs,auth.rs,catalog.rs,inventory.rs,sales.rs,purchases.rs,receiving.rs,parties.rs,finance.rs,reports.rs,settings.rs,backup.rs,imports.rs,printing.rs,setup.rs}
-│   └── tests/{costing.rs,posting.rs,returns.rs,journal.rs,aging.rs,migrations.rs,permissions.rs,backup.rs}
+│   │   ├── lib.rs
+│   │   ├── main.rs
+│   │   └── state.rs
+│   ├── tests/
+│   │   └── backend.rs
+│   ├── windows/
+│   │   ├── Arabic.nsh
+│   │   └── hooks.nsh
+│   ├── Cargo.lock
+│   ├── Cargo.toml
+│   ├── build.rs
+│   ├── clippy.toml
+│   └── tauri.conf.json
 ├── tests/
-│   ├── test_schema.py
-│   ├── money.test.ts
-│   ├── format.test.ts
-│   └── pos.test.tsx
-├── scripts/
-│   ├── export_schema.py
-│   ├── check.ps1
-│   └── measure-release.ps1
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── schema.sql
-└── .github/workflows/windows.yml
+│   ├── frontend/
+│   │   ├── api.test.ts
+│   │   ├── numbers.test.ts
+│   │   └── printing.test.ts
+│   ├── ui/
+│   │   ├── fixtures.ts
+│   │   ├── printing.spec.ts
+│   │   └── workflows.spec.ts
+│   ├── installer-hooks.nsi
+│   ├── test_release.py
+│   └── test_schema.py
+├── .dockerignore
+├── .gitattributes
+├── .gitignore
+├── .prettierignore
+├── .prettierrc.json
+├── README.md
+├── README_AR.md
+├── index.html
+├── package-lock.json
+├── package.json
+├── playwright.config.ts
+├── postcss.config.js
+├── rust-toolchain.toml
+├── tailwind.config.js
+├── tsconfig.json
+└── vite.config.ts
 ```
 
-Brace groups enumerate individual files; they are not a glob or omitted code. Features
-use shared typed contracts instead of duplicating a separate API client for each screen.
-Production DDL lives only in migrations; `docs/schema.sql` is a generated, complete,
-executable reference with migration receipts. Never edit that generated file by hand.
+Features share typed contracts and controls rather than separate API clients. Production
+DDL lives in the versioned migrations. `docs/schema.sql` is the generated executable
+reference with migration receipts; do not edit it by hand. Cairo's font files come from
+`@fontsource-variable/cairo` during the Vite build; its license is in `public/licenses`.
 
 ## 4. Exact arithmetic contract
 
@@ -220,8 +305,8 @@ decimal/group separators as text; normalize before Zod and Rust validation.
 reject a quantity that cannot be represented at six decimal places. Line gross is
 `round(quantity_micros * unit_price_minor / 1_000_000)`. Apply line discounts, allocate
 the invoice discount across remaining line values, then calculate VAT per line on the
-discounted base. Prices are VAT-exclusive. Percentage input is converted to a fixed
-integer discount amount; stored line totals are immutable snapshots.
+discounted base. Prices are VAT-exclusive. Line and invoice discounts are stored as
+fixed integer amounts; posted line totals are immutable snapshots.
 
 Proportional discounts, landed charges and partial-return values use the largest
 remainder method, with line number as the deterministic tie-breaker. Allocation shares
@@ -377,7 +462,7 @@ original tax/discount proration, price/credit overrides, movement costs, active 
 presence, approval totals, cash/cheque-leg reconciliation, purchase accrual values,
 late-cost replay, reversal dependencies, audit contents and completion before commit.
 The SQL guards are defense in depth; direct SQL access is not an alternative application
-API. The schema tests deliberately distinguish constraints from future Rust services.
+API. The schema tests distinguish SQL constraints from the separately tested Rust services.
 
 Use SQLite STRICT tables, FTS5 and foreign keys. Enable connection pragmas before
 transactions and check their results. Foreign keys are a per-connection requirement.
@@ -400,10 +485,11 @@ own receipts table. Migration reference-data inserts never create a default logi
 
 ## 8. Arabic interface and workflows
 
-The HTML root is `lang="ar" dir="rtl"`. Bundle the licensed Cairo WOFF2 font with
-its OFL; use no remote font requests. Static UI copy, navigation, validation messages,
-permission captions and print labels live in `src/i18n/ar.json`. Arabic names stored
-as editable business data and seeded chart-of-account names are data, not UI copy.
+The HTML root is `lang="ar" dir="rtl"`. Cairo WOFF2 is bundled from Fontsource with
+its OFL; there are no remote font requests. Frontend copy, navigation, form validation
+and print/custom installer labels live in `src/i18n/ar.json`. Rust/SQL validation errors
+are Arabic in their service/guard definitions. Editable business names and seeded roles,
+permissions and chart-of-account names are reference data in the migrations.
 Database errors have Arabic fallback messages and are mapped to stable application
 error codes; raw SQL/internal paths are not shown to users.
 
@@ -420,41 +506,45 @@ parameterized prefix fallback supports codes. Search uses a short debounce and r
 sequence checks so stale results cannot overwrite newer scans. Product lists never
 load all products into Zustand.
 
-POS keeps focus on scan/search; Enter adds, arrows choose results, F2 focuses search,
-F4 selects the customer, F6 opens payment, F8 holds/resumes and F9 posts. Esc dismisses
+POS keeps focus on scan/search; Enter adds, arrows choose results, F2 opens POS,
+F4 focuses product search, F8 saves the draft and F9 posts. Hold/resume are explicit
+buttons; Ctrl+K focuses the current screen's search field. Esc dismisses
 the active dialog. Shortcuts ignore text-editing contexts where applicable, show in
 Arabic help, and never bypass validation or permission checks. Posting disables repeat
 activation while retaining its request ID. On failure the draft remains reviewable.
 
 All feature routes are lazy loaded. Recharts loads only with dashboard/report charts;
 JsBarcode loads only for labels/print. React Hook Form and Zod are shared; Zustand owns
-session, preferences and unsaved POS state, while persisted documents remain authoritative
-in SQLite. Dialogs trap/restore focus; forms have Arabic accessible labels and error summaries.
+session, navigation, dirty-state and bootstrap data. The editor owns unsaved line values;
+persisted documents remain authoritative in SQLite. Dialogs trap/restore focus; forms
+have Arabic accessible labels and field errors.
 
 CSV import/export is UTF-8 with BOM for Excel compatibility. Spreadsheet import supports
 `.xlsx` and legacy `.xls` through Rust `calamine`; export uses `rust_xlsxwriter` for `.xlsx`.
 No Office installation is needed. Validate file size/row limits, show a preview with
-row-level errors, detect duplicate codes/barcodes, and explicitly select create/update
+validation errors, detect duplicate codes/barcodes, and explicitly select create/update
 behavior before applying. Export formula-looking cells as text. Files are processed in
 Rust with bounded memory; import batches retain checksum and source name. Opening stock
 and balances use the normal audited posting services, never direct ledger injection.
 
-Demo mode is an explicit first-run option or developer flag, seeded once only on a new
-store. It adds approximately 100 named Arabic products spanning pipes, fittings, valves,
-mixers, pumps, tanks and tools, multiple units and sample parties/documents. It is separate
-from mandatory reference data and must not populate an existing production store.
+Demo mode is an explicit first-run checkbox (`Setup.demo` in the API), seeded only into
+an empty catalogue. It adds 100 Arabic products spanning pipes, fittings, valves, mixers,
+pumps, tanks and tools, each with a base-unit barcode and prices. It does not create
+parties, documents or opening quantities. Mandatory reference data is independent of it.
 
 ## 9. Print and PDF contract
 
 Print models read frozen document snapshots, so later product, price, party or store
 changes cannot alter an old invoice. Provide A4 invoice, 80 mm receipt, goods-received
-note, stocktake count sheet, reports and configurable label grids. Use HTML/CSS and the
-bundled Arabic font for shaping. A hidden print route receives a typed model, waits for
+note, stocktake count sheet, reports and A4 label grids with configurable counts/offset.
+Use HTML/CSS and the bundled Arabic font for shaping. A lazy modal preview receives a typed model, waits for
 `document.fonts.ready` and images, then calls native WebView2 printing/PDF APIs through
-a narrowly scoped Windows Rust adapter. Avoid browser screenshots and canvas text PDFs.
+a narrowly scoped Windows Rust adapter. Fedora uses the corresponding WebKitGTK adapter.
+The implementation is documented in [PRINTING.md](PRINTING.md). Avoid browser screenshots
+and canvas text PDFs.
 
 A4 uses `@page size: A4`, repeated table headers, stable numeric columns, sensible page
-breaks and page footer totals. The thermal layout uses an 80 mm page and approximately
+breaks and a complete invoice summary kept on one page when it fits. The thermal layout uses an 80 mm page and approximately
 72 mm printable content with no navigation or clipped RTL labels. Barcodes retain ASCII
 digits and human-readable captions; all other numbers follow the configured digit style.
 Report filters, dates, store identity and generation time appear on printed reports.
@@ -504,12 +594,15 @@ and adversarial writes, including atomic rollback, reversal, quantity limits, hi
 aging, FTS maintenance, indexes, locks and currency scale. They are executable now with
 Python's standard library; Python is not part of the shipped runtime.
 
-Stage 2 adds Rust unit/property and transaction tests for checked amounts, weighted
+Stage 2 adds Rust arithmetic and transaction tests for checked amounts, weighted
 average and depletion, fractional units, negative-stock reconciliation, invoice posting,
 all return paths, balancing, aging and authorization. Stage 3 adds keyboard and RTL
 component tests. Stage 4 renders and visually verifies Arabic print/PDF samples. Stage 5
-builds with locked dependencies on Windows MSVC, runs tests and creates the NSIS `.exe`.
-Stage 6 delivers the final Arabic user guide and complete developer/build documentation.
+builds the Windows MSVC target from Fedora with locked dependencies and creates an NSIS
+`.exe`; it also supplies native Windows CI and acceptance scripts. Stage 6 supplies
+[the Arabic user guide](../README_AR.md) and [the final developer README](../README.md).
+Recorded results are in [DEVELOPMENT.md](DEVELOPMENT.md); supplied Windows CI has not
+been run as part of the local delivery.
 
 Release checks include a new-store install, offline launch, store upgrade, restore to
 another local folder, simulated power loss/failed transaction, Arabic font rendering,

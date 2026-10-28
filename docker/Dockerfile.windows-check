@@ -1,0 +1,5 @@
+FROM plumbing-erp-tools:stage2
+RUN apt-get update && apt-get install -y --no-install-recommends binutils-mingw-w64-x86-64 gcc-mingw-w64-x86-64-posix \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-pc-windows-gnu
+WORKDIR /work/src-tauri

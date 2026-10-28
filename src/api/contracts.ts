@@ -57,6 +57,7 @@ export interface Request { request_id: string; mutation: Mutation; }
 export type Query =
   { type: 'bootstrap';  } |
   { type: 'cash_desk';  } |
+  { type: 'print_snapshot'; source: PrintSource; } |
   { type: 'products'; search: string; after_id: Int; limit: number; } |
   { type: 'product'; id: Int; } |
   { type: 'parties'; search: string; after_id: Int; limit: number; } |
@@ -69,3 +70,9 @@ export type Query =
   { type: 'audit'; after_id: Int; limit: number; } |
   { type: 'users';  };
 export type Report = 'trial_balance' | 'income_statement' | 'cash_flow' | 'product_profit' | 'category_profit' | 'customer_profit' | 'party_statement' | 'receivables' | 'payables' | 'aging' | 'vat' | 'low_stock' | 'valuation' | 'cheques' | 'purchase_orders' | 'open_items' | 'cash_shifts';
+export type PrintSource =
+  { type: 'document'; id: Int; } |
+  { type: 'report'; report: Report; from: string; to: string; party_id: Int | null; } |
+  { type: 'labels'; unit_ids: Array<Int>; } |
+  { type: 'stock_card'; product_id: Int; warehouse_id: Int; };
+export interface PrintPaper { width_mm: number; height_mm: number; }

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run release:prepare",
     "frontendDist": "../dist",
     "features": [
       "desktop"
@@ -52,8 +52,15 @@
           "Arabic"
         ],
         "displayLanguageSelector": false,
-        "installMode": "currentUser"
-      }
-    }
+        "installMode": "currentUser",
+        "compression": "lzma",
+        "installerHooks": "windows/hooks.nsh",
+        "customLanguageFiles": {
+          "Arabic": "windows/Arabic.nsh"
+        }
+      },
+      "allowDowngrades": false
+    },
+    "shortDescription": "نظام إدارة متجر أدوات السباكة"
   }
 }

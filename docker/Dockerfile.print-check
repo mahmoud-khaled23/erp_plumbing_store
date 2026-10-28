@@ -1,0 +1,7 @@
+FROM plumbing-erp-check:stage2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb poppler-utils zbar-tools python3 \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+ENV WEBKIT_DISABLE_COMPOSITING_MODE=1
+WORKDIR /work/src-tauri

@@ -1,0 +1,24 @@
+FROM node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94 AS node
+FROM rust:1.95-slim@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0
+ARG ACCEPT_MICROSOFT_SDK_LICENSE=no
+RUN test "$ACCEPT_MICROSOFT_SDK_LICENSE" = yes || \
+    (echo 'Read https://go.microsoft.com/fwlink/?LinkId=2086102 before enabling the SDK build.' >&2; exit 1)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang llvm lld nsis cmake ninja-build pkg-config libssl-dev python3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && npm install --global npm@11.21.1
+RUN rustup target add x86_64-pc-windows-msvc \
+    && cargo install --locked --version 0.23.1 cargo-xwin
+ENV CARGO_HOME=/work/output/cargo \
+    CARGO_TARGET_DIR=/work/output/target-msvc \
+    XWIN_CACHE_DIR=/work/output/xwin \
+    XWIN_ARCH=x86_64 \
+    XWIN_VERSION=17 \
+    XWIN_SDK_VERSION=10.0.26100 \
+    XDG_CACHE_HOME=/work/output/bundler-cache \
+    CARGO_BUILD_JOBS=2
+WORKDIR /work

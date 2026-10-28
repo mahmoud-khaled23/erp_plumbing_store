@@ -18,6 +18,7 @@ import { Button, Field, Input, Modal, Panel, Status } from '../../components/ui'
 import { DataTable } from '../../components/Table';
 import { MasterSelect } from '../../components/Pickers';
 import { Payments, paymentPayload, type PaymentEdit } from '../../components/Payments';
+import { openPrint } from '../printing/store';
 export const documentPermission = (kind: string) =>
   kind === 'sale' || kind === 'quotation'
     ? 'sales.write'
@@ -249,6 +250,7 @@ export function DocumentDetail({
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
           {onBack && <Button onClick={onBack}>{t('back')}</Button>}
+          <Button onClick={() => openPrint({ type: 'document', id })}>{t('printDocument')}</Button>
           {canEdit && status === 'draft' && onEdit && (
             <Button tone="primary" onClick={() => onEdit(detail)}>
               {t('edit')}

@@ -1,4 +1,4 @@
-import ar from './ar.json';
+import ar from './ar.json' with { type: 'json' };
 export function t(key: string): string {
   let value: unknown = ar;
   for (const part of key.split('.'))

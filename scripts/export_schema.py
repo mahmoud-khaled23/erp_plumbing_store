@@ -38,7 +38,7 @@ def main():
         print("Schema reference matches all versioned migrations.")
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(expected, encoding="utf-8")
+        destination.write_text(expected, encoding="utf-8", newline="\n")
         print(f"Wrote {destination.relative_to(ROOT)}")
 
 

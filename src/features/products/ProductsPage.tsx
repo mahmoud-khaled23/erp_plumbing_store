@@ -28,6 +28,7 @@ import {
 import { DataTable, Pager } from '../../components/Table';
 import { ImportDialog } from '../../components/ImportDialog';
 import { MasterManager } from '../settings/MasterManager';
+import { openPrint } from '../printing/store';
 
 export function Barcode({ value }: { value: string }) {
   const ref = useRef<SVGSVGElement>(null);
@@ -402,6 +403,13 @@ export default function ProductsPage() {
           </div>
           <DataTable
             rows={inspect.units}
+            actions={(u) =>
+              u.active === '1' && u.barcode ? (
+                <Button onClick={() => openPrint({ type: 'labels', unit_ids: [s(u, 'id')] })}>
+                  {t('printLabels')}
+                </Button>
+              ) : null
+            }
             columns={[
               'name_ar',
               'barcode',
@@ -413,6 +421,19 @@ export default function ProductsPage() {
           {inspect.units.map((u) => (
             <Barcode key={s(u, 'id')} value={s(u, 'barcode')} />
           ))}
+          <Button
+            disabled={!inspect.units.some((u) => u.active === '1' && u.barcode)}
+            onClick={() =>
+              openPrint({
+                type: 'labels',
+                unit_ids: inspect.units
+                  .filter((u) => u.active === '1' && u.barcode)
+                  .map((u) => s(u, 'id')),
+              })
+            }
+          >
+            {t('printAllUnits')}
+          </Button>
           {allowed('products.write') && (
             <Button
               onClick={() =>

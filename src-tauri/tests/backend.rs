@@ -4,6 +4,141 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 const DAY: &str = "2026-10-27";
+
+#[test]
+fn print_snapshots_preserve_history_and_never_change_ledgers() {
+    let f = Fixture::new();
+    f.opening();
+    let doc = f.save(f.draft(DocumentKind::Sale, 1_250_000, 1500, 500));
+    f.post(doc);
+    let original = f.quantity_value();
+    f.db()
+        .execute("UPDATE store_settings SET store_name='اسم جديد'", [])
+        .unwrap();
+    f.db()
+        .execute(
+            "UPDATE products SET name_ar='اسم صنف جديد' WHERE id=?1",
+            [f.product],
+        )
+        .unwrap();
+    let snapshot = f
+        .app
+        .query(Query::PrintSnapshot {
+            source: PrintSource::Document { id: Int(doc) },
+        })
+        .unwrap();
+    assert_eq!(snapshot["store"]["store_name"], "متجر الاختبار");
+    assert_eq!(snapshot["preferences"]["store_name"], "اسم جديد");
+    assert_eq!(
+        snapshot["document"]["lines"][0]["product_name_snapshot"],
+        "ماسورة مياه"
+    );
+    assert_eq!(
+        snapshot["document"]["lines"][0]["quantity_micros"],
+        "1250000"
+    );
+    assert_eq!(f.quantity_value(), original);
+    f.app
+        .prepare_print(PrintSource::Document { id: Int(doc) }, false)
+        .unwrap();
+    f.app
+        .prepare_print(PrintSource::Document { id: Int(doc) }, true)
+        .unwrap();
+    let requests: i64 = f.db().query_row("SELECT count(*) FROM audit_log WHERE entity_type='print' AND action IN ('print_requested','pdf_export_requested')", [], |r| r.get(0)).unwrap();
+    assert_eq!(requests, 2);
+    assert_eq!(f.quantity_value(), original);
+    f.app
+        .create_user("cashier", "أمين الخزينة", "CashierPassword12", &[Int(2)])
+        .unwrap();
+    f.app.login("cashier", "CashierPassword12").unwrap();
+    assert!(
+        f.app
+            .query(Query::PrintSnapshot {
+                source: PrintSource::Document { id: Int(doc) }
+            })
+            .is_ok()
+    );
+    assert_eq!(
+        f.app
+            .query(Query::PrintSnapshot {
+                source: PrintSource::Report {
+                    report: Report::TrialBalance,
+                    from: DAY.into(),
+                    to: DAY.into(),
+                    party_id: None
+                }
+            })
+            .unwrap_err()
+            .code,
+        "forbidden"
+    );
+    f.app.logout().unwrap();
+    assert!(
+        f.app
+            .prepare_print(PrintSource::Document { id: Int(doc) }, true)
+            .is_err()
+    );
+    assert_eq!(
+        f.app
+            .query(Query::PrintSnapshot {
+                source: PrintSource::Labels {
+                    unit_ids: vec![Int(f.unit)]
+                }
+            })
+            .unwrap_err()
+            .code,
+        "unauthenticated"
+    );
+}
+
+#[test]
+fn print_report_is_complete_or_rejects_oversize_without_truncation() {
+    let f = Fixture::new();
+    let db = f.db();
+    db.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<205) INSERT INTO products(code,name_ar,normalized_name,category_id,base_unit_id,min_stock_micros) SELECT 'PRINT-'||x,'صنف اختبار','صنف اختبار',1,1,1000000 FROM n",[]).unwrap();
+    let source = PrintSource::Report {
+        report: Report::LowStock,
+        from: DAY.into(),
+        to: DAY.into(),
+        party_id: None,
+    };
+    let snapshot = f
+        .app
+        .query(Query::PrintSnapshot {
+            source: source.clone(),
+        })
+        .unwrap();
+    assert_eq!(snapshot["rows"].as_array().unwrap().len(), 206);
+    db.execute("WITH RECURSIVE n(x) AS (SELECT 206 UNION ALL SELECT x+1 FROM n WHERE x<10001) INSERT INTO products(code,name_ar,normalized_name,category_id,base_unit_id,min_stock_micros) SELECT 'PRINT-'||x,'صنف اختبار','صنف اختبار',1,1,1000000 FROM n",[]).unwrap();
+    assert!(
+        f.app
+            .query(Query::PrintSnapshot { source })
+            .unwrap_err()
+            .message
+            .contains("عشرة آلاف")
+    );
+    assert!(
+        f.app
+            .query(Query::PrintSnapshot {
+                source: PrintSource::Labels {
+                    unit_ids: vec![Int(f.unit), Int(f.unit)]
+                }
+            })
+            .is_err()
+    );
+    assert!(
+        f.app
+            .query(Query::PrintSnapshot {
+                source: PrintSource::Report {
+                    report: Report::PartyStatement,
+                    from: DAY.into(),
+                    to: DAY.into(),
+                    party_id: None
+                }
+            })
+            .is_err()
+    );
+}
 struct Fixture {
     app: App,
     temp: TempDir,

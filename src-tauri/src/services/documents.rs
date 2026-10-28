@@ -34,7 +34,7 @@ pub fn header(
     date(day)?;
     let settings = db::rows(
         db,
-        "SELECT store_name,tax_number,address,phones,logo_path,currency_code,currency_symbol,currency_minor_digits FROM store_settings WHERE id=1",
+        "SELECT store_name,tax_number,address,phones,logo_path,currency_code,currency_symbol,currency_minor_digits,receipt_footer FROM store_settings WHERE id=1",
         [],
     )?;
     let (name, address, tax, terms): (String, String, String, i64) = if let Some(id) = party {

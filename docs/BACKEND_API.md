@@ -1,4 +1,4 @@
-# Backend interface for the React stage
+# Backend interface
 
 The authoritative input types are `src-tauri/src/models/requests.rs`. Requests reject
 unknown fields. Every `Int` is a signed decimal **string**, never a JSON number. IDs,
@@ -7,7 +7,7 @@ ISO calendar dates. Boolean options, bounded page sizes and basis-point rates us
 normal JSON types. Database query result integers also serialize as strings, including
 SQLite 0/1 flag columns; the frontend wrapper must decode each field explicitly.
 
-Stage 3 generates `src/api/contracts.ts` from these request models using
+`src/api/contracts.ts` is generated from these request models using
 `python3 scripts/generate_types.py`. `npm run check` rejects contract drift and validates
 Arabic labels; `src/api/client.ts` also validates response shapes at runtime.
 
@@ -32,7 +32,10 @@ remaining receipt/invoice/return quantities; journal and settlement rows require
 | `erp_file` | `action: FileAction` | Native file/folder selection; no caller-provided filesystem path |
 | `erp_import_apply` | `token`, `replace` | Apply the exact previously previewed product file |
 | `erp_import_opening_apply` | `token`, `balances`, `date`, `warehouseId` | Post opening imports through normal services |
+| `erp_print` | `source: PrintSource`, `paper: PrintPaper` | Reauthorize source, open the native print dialog; no claim of physical print completion |
+| `erp_export_pdf` | `source: PrintSource`, `paper: PrintPaper` | Native save dialog and atomic PDF export; returns `{path}` or `{cancelled:true}` |
 | `erp_recover` | `username`, `password` | Select a backup and recover a damaged store using backup administrator credentials |
+| `erp_frontend_ready` | none | Main-window readiness signal; writes a local measurement only when the launcher sets `PLUMBING_ERP_STARTUP_REPORT` |
 
 Tauri's top-level Rust argument names use camelCase in JavaScript (`warehouseId`,
 `userId`). Fields inside the serde request objects remain snake_case exactly as defined
@@ -189,6 +192,26 @@ are Arabic; raw SQLite queries, internal paths and credentials are not returned.
 result is retryable. Validation, revision conflicts, credit warnings and insufficient
 stock require user correction or the explicit authorized acknowledgement.
 
-Printing consumes the frozen `Query::Document` snapshots. Native printing/PDF commands
-will be added with the complete stage 4 templates; no simulated print-success command
-is present in stage 2.
+## Print snapshots
+
+`erp_query` accepts `{"type":"print_snapshot","source":{"type":"document","id":"42"}}`.
+Other sources are `{"type":"labels","unit_ids":["1","2"]}`,
+`{"type":"stock_card","product_id":"1","warehouse_id":"1"}`, and
+`{"type":"report","report":"party_statement","from":"2026-01-01","to":"2026-12-31","party_id":"1"}`.
+A report without a party uses `party_id:null`; party statements require a party.
+
+The response contains `document` (nullable), `rows`, `opening`, `context`, `references`,
+`store`, `preferences` and `generated_at`. All financial values remain integer strings.
+Documents preserve historical store and line snapshots; reports/labels use current
+settings. Snapshots load all selected report rows up to 10,000, reject overflow and
+require the same source permission as the on-screen query. Labels accept 1–100 unique
+active product units with barcodes. Read operations never mutate ledgers.
+
+Both print commands take the same `source` and a `paper` object, for example
+`{"width_mm":210,"height_mm":297}`. Allowed sizes are A4 portrait/landscape or width
+80 mm with integer height 60–800 mm. Only the main Tauri window may invoke them. Each authorized output request appends
+`print_requested` or `pdf_export_requested` to the audit log, including its source.
+This records intent rather than physical printer success or completion of a save dialog.
+No output path or arbitrary HTML is accepted over IPC. Native dialogs select the
+PDF destination, and existing files cannot be overwritten. See [PRINTING.md](PRINTING.md)
+for the template, snapshot and native-export implementation.

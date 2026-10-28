@@ -26,6 +26,7 @@ fn limit(value: u16) -> i64 {
 }
 pub fn query(db: &Connection, a: &Actor, q: &Query) -> Result<Value> {
     match q {
+        Query::PrintSnapshot { source } => super::printing::snapshot(db, a, source),
         Query::Bootstrap => {
             let mut value = json!({"authenticated":true,"setup_required":false,"permissions":a.permissions,"user_id":Int(a.user_id)});
             for (table, key) in [
@@ -271,7 +272,7 @@ fn escape_like(s: &str) -> String {
         .replace('%', "\\%")
         .replace('_', "\\_")
 }
-fn report(
+pub(crate) fn report(
     db: &Connection,
     r: Report,
     from: &str,

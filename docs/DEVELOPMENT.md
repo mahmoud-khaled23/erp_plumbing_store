@@ -1,7 +1,8 @@
 # Developing on Fedora, deploying on Windows
 
-Stages 1–3 provide the schema, Rust backend, Tauri adapter and Arabic React application.
-Printing/PDF is stage 4 and the final Windows NSIS package is stage 5. The portable
+The source includes the schema, Rust backend, Tauri adapter, Arabic React application,
+native printing/PDF and Windows NSIS build/acceptance tools. Start with the
+[developer README](../README.md) or [Arabic user guide](../README_AR.md). The portable
 backend can also be compiled and tested without a webview or JavaScript dependencies.
 
 ## Portable backend
@@ -116,34 +117,47 @@ cargo check --locked --manifest-path src-tauri/Cargo.toml --features desktop
 repository is pushed or the workflow is dispatched. This workflow has been written
 locally; no remote workflow run or Windows execution is claimed by this delivery.
 
-The final packaging target is `x86_64-pc-windows-msvc` and NSIS `.exe`, configured in
-`src-tauri/tauri.conf.json`. Windows CI or a Windows VM will produce and smoke-test the
-installer in stage 5. Installing a Rust Windows target on Fedora alone does not provide
-the MSVC SDK/linker or verify Windows behavior. The production build path therefore
-uses a Windows runner; cross-compiling an installer is not the release acceptance test.
+The packaging target is `x86_64-pc-windows-msvc` and NSIS `.exe`, configured in
+`src-tauri/tauri.conf.json`. [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md) gives exact commands
+for the Fedora cargo-xwin container and native Windows builds, artifact verification,
+installation checks and measurements. The MSVC SDK/CRT license must be accepted before
+using the cross-build. Installing a Rust Windows target alone does not provide the SDK
+or verify Windows behavior. Cross-compilation is not the Windows acceptance test.
 [Tauri Windows distribution documentation](https://v2.tauri.app/distribute/windows-installer/).
 
 The compact installer assumes WebView2 is installed already. An offline runtime package
-can travel separately on USB, or be bundled in a larger installer. The <20 MB installer,
-<150 MB idle RAM and <2 s cold-start targets remain unmeasured until the complete GUI
-and installer are built on a documented Windows reference machine.
+can travel separately on USB. This configuration never downloads it during installation.
+The verifier enforces an installer size below 20,000,000 bytes. Idle RAM and cold-start
+targets still require the documented Windows reference-machine measurements.
 
-## Validation recorded on 27 October 2026
+## Validation recorded through 28 October 2026
 
 On the Fedora development host, using the pinned Linux Rust containers:
 
-- 27 Rust tests passed, covering arithmetic, postings/rollback, linked returns,
+- 29 Rust tests passed, covering arithmetic, postings/rollback, linked returns,
   receipt/invoice matching, late costs, negative-stock reconciliation, permissions,
   historical aging, file imports, backup recovery and pre-migration preservation.
-- 28 Python schema contract tests passed; the generated schema matches all eight migrations.
+- 32 Python tests passed: 28 schema contracts and four installer/PE/integrity checks; the
+  generated schema matches all eight migrations. Explicit UTF-8 and LF keep the
+  Arabic source and migration checksums consistent between Fedora and Windows.
 - Rust formatting and Clippy with warnings denied passed.
 - `cargo check --locked --features desktop` compiled the Linux Tauri adapter.
 - React/TypeScript checks, production Vite build and frontend formatting passed.
-- 10 frontend unit tests and 8 Chrome/Rust/SQLite integration workflows passed.
+- 12 frontend unit tests and 10 Chrome/Rust/SQLite integration workflows passed.
+- Windows GNU desktop Clippy checked the WebView2 PDF bindings with warnings denied.
+- NSIS hooks compiled with warnings treated as errors. PowerShell scripts passed parsing
+  and process-tree memory accounting checks inside PowerShell 7.5 on Linux.
+- npm reported zero known vulnerabilities in runtime dependencies at this check.
+- The Fedora MSVC build produced a 3,713,278-byte NSIS installer. PE import checks and
+  independent LLVM inspection confirmed the x64 GUI payload with static VC++ linkage;
+  the copied installer's SHA-256 check passed. See the release guide for the exact hash.
+- Five native WebKitGTK PDFs matched browser page counts/sizes; both barcode codes decoded at 203 dpi.
 - Arabic RTL dashboard and POS screenshots were inspected; Cairo loads locally.
 
-These checks do not constitute Windows execution, native-webview acceptance tests, printer tests
-or measurements of installer size, idle memory or startup time.
+The native rendering check covers the PDF adapter and exported print markup, not the
+complete native desktop or save/printer dialogs. These checks do not constitute Windows
+execution, physical printer tests or measurements of idle memory or startup time. Actual
+installer size and hashes are recorded by the separate release artifact verifier.
 
 ## Application files and portability
 
@@ -200,5 +214,7 @@ preserve the final minor-unit remainder. Existing migrations 0001–0007 are unc
 
 All current code is implemented in these files; there are no success-returning mock
 services. The module screens and keyboard navigation are described in [FRONTEND.md](FRONTEND.md).
-Print templates, the PDF adapter, final packaging, performance profiling and printer
-verification are still required before a production release.
+Stage 4 adds print templates and the native PDF adapter; see [PRINTING.md](PRINTING.md)
+for the implementation and Fedora native-rendering checks. A Windows installer candidate
+has been built locally; performance profiling and Windows/printer acceptance remain
+required before a production release.

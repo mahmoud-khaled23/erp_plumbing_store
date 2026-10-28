@@ -19,7 +19,7 @@ test('first run, validation and offline RTL font', async ({ page, backend }) => 
   const requests: string[] = [];
   page.on('request', (r) => requests.push(r.url()));
   await nav(page, 'الأصناف');
-  expect(requests.every((u) => u.startsWith('http://127.0.0.1:5173'))).toBe(true);
+  expect(requests.every((u) => u.startsWith(new URL(page.url()).origin + '/'))).toBe(true);
 });
 
 test('barcode sale, fractional quantity, post and partial return', async ({ page, backend }) => {

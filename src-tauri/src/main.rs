@@ -4,7 +4,9 @@ use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
+    let started = std::time::Instant::now();
     let result = tauri::Builder::default()
+        .manage(startup::Startup::new(started))
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -41,11 +43,16 @@ fn main() {
             erp_recover,
             erp_file,
             erp_import_apply,
-            erp_import_opening_apply
+            erp_import_opening_apply,
+            printing::erp_print,
+            printing::erp_export_pdf,
+            startup::erp_frontend_ready
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {
         eprintln!("تعذر بدء التطبيق: {error}");
+        #[cfg(windows)]
+        startup::show_startup_failure();
         std::process::exit(1);
     }
 }

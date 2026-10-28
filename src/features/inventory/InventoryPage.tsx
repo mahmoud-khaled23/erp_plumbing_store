@@ -22,6 +22,7 @@ import { DataTable, Pager } from '../../components/Table';
 import { MasterSelect, ProductSearch } from '../../components/Pickers';
 import { DocumentEditor } from '../documents/DocumentEditor';
 import { DocumentDetail } from '../documents/DocumentDetail';
+import { openPrint } from '../printing/store';
 
 function StockCard({
   row,
@@ -43,6 +44,18 @@ function StockCard({
   return (
     <Modal title="stockCard" onClose={onClose} wide>
       <h3 className="mb-4 font-bold">{s(row, 'name_ar')}</h3>
+      <Button
+        className="mb-4"
+        onClick={() =>
+          openPrint({
+            type: 'stock_card',
+            product_id: s(row, 'product_id'),
+            warehouse_id: warehouse,
+          })
+        }
+      >
+        {t('printReport')}
+      </Button>
       {result.error ? (
         <ErrorState error={result.error} />
       ) : result.loading ? (

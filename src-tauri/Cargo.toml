@@ -14,9 +14,13 @@ name = "plumbing-erp"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+[[example]]
+name = "native_print_check"
+required-features = ["desktop"]
+
 [features]
 default = []
-desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance", "dep:tempfile", "dep:gtk", "dep:webkit2gtk", "dep:webview2-com", "dep:windows"]
 
 [dependencies]
 argon2 = "0.5"
@@ -32,9 +36,18 @@ csv = "1"
 calamine = "0.31"
 rust_xlsxwriter = "0.92"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-tauri = { version = "2", features = ["protocol-asset"], optional = true }
+tauri = { version = "~2.11.6", features = ["protocol-asset"], optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
+tempfile = { version = "3", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "=0.18.2", optional = true }
+webkit2gtk = { version = "=2.0.2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = { version = "=0.38.2", optional = true }
+windows = { version = "=0.61.3", optional = true }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }

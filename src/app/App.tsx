@@ -16,6 +16,8 @@ import { displayDate } from '../lib/numbers';
 import { useHotkeys, useTask } from '../lib/hooks';
 import { Button, ConfirmHost, ErrorState, Icon, Loading, Modal, ToastHost } from '../components/ui';
 import AuthPage, { OpeningWizard, PasswordDialog, ReauthDialog } from '../features/auth/AuthPage';
+import { usePrint, closePrint } from '../features/printing/store';
+const PrintHost = lazy(() => import('../features/printing/PrintHost'));
 const Dashboard = lazy(() => import('../features/dashboard/DashboardPage'));
 const Products = lazy(() => import('../features/products/ProductsPage'));
 const Parties = lazy(() => import('../features/parties/PartiesPage'));
@@ -112,6 +114,7 @@ function Screen({ route }: { route: Route }) {
   }
 }
 export default function App() {
+  const printJob = usePrint((s) => s.job);
   const b = useStore((s) => s.bootstrap),
     route = useStore((s) => s.route);
   const [error, setError] = useState<unknown>(),
@@ -120,6 +123,23 @@ export default function App() {
     [collapsed, setCollapsed] = useState(false),
     [expired, setExpired] = useState(false);
   const task = useTask();
+  useEffect(() => {
+    if (!b) return;
+    let live = true;
+    void document.fonts.ready.then(() => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (live) void api.frontendReady().catch(() => {});
+        }),
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [b]);
+  useEffect(() => {
+    if (!b?.authenticated) closePrint();
+  }, [b?.authenticated]);
   useEffect(() => {
     const expired = () => setExpired(true);
     window.addEventListener('erp-session-expired', expired);
@@ -156,6 +176,11 @@ export default function App() {
     <Boundary>
       <ConfirmHost />
       <ToastHost />
+      {printJob && b?.authenticated && (
+        <Suspense fallback={null}>
+          <PrintHost />
+        </Suspense>
+      )}
       {!b ? (
         error ? (
           <div className="flex min-h-screen items-center justify-center bg-canvas p-8">

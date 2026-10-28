@@ -7,7 +7,7 @@ export default defineConfig({
   outputDir: 'output/playwright-results',
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: 'http://127.0.0.1:5179',
     channel: 'chrome',
     headless: true,
     actionTimeout: 10000,
@@ -16,9 +16,9 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev',
-    url: 'http://127.0.0.1:5173',
-    reuseExistingServer: !process.env.CI,
+    command: 'npm run dev -- --port 5179',
+    url: 'http://127.0.0.1:5179',
+    reuseExistingServer: false,
     timeout: 30000,
   },
 });

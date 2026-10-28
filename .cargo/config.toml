@@ -1,0 +1,4 @@
+# Keep the Windows package independent of a separately installed VC++ runtime.
+# Target-scoped flags leave Fedora development and host build tools unchanged.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

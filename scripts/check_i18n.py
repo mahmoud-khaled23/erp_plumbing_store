@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import sys
 ROOT=Path(__file__).resolve().parents[1]
-labels=json.loads((ROOT/'src/i18n/ar.json').read_text())
+labels=json.loads((ROOT/'src/i18n/ar.json').read_text(encoding='utf-8'))
 def exists(key):
     value=labels
     for part in key.split('.'):
@@ -16,7 +16,7 @@ errors=[]
 for path in (ROOT/'src').rglob('*'):
     if path.suffix not in ('.ts','.tsx'):
         continue
-    text=path.read_text()
+    text=path.read_text(encoding='utf-8')
     if re.search('[ء-ي]',text):
         errors.append(f'{path.relative_to(ROOT)}: Arabic labels belong in ar.json')
     keys=re.findall(r"\bt\(['\"]([^'\"]+)['\"]\)",text)

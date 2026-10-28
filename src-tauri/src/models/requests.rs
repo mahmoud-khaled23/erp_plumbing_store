@@ -454,6 +454,9 @@ pub struct Request {
 pub enum Query {
     Bootstrap,
     CashDesk,
+    PrintSnapshot {
+        source: PrintSource,
+    },
     Products {
         search: String,
         after_id: Int,
@@ -524,4 +527,32 @@ pub enum Report {
     PurchaseOrders,
     OpenItems,
     CashShifts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrintSource {
+    Document {
+        id: Int,
+    },
+    Report {
+        report: Report,
+        from: String,
+        to: String,
+        party_id: Option<Int>,
+    },
+    Labels {
+        unit_ids: Vec<Int>,
+    },
+    StockCard {
+        product_id: Int,
+        warehouse_id: Int,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrintPaper {
+    pub width_mm: u16,
+    pub height_mm: u16,
 }
