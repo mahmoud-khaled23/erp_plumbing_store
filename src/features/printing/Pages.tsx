@@ -40,9 +40,11 @@ function TableSection({ section, indices }: { section: PrintSection; indices?: n
             key={i}
             data-flow-id={`${section.id}:${i}`}
             className={
-              section.id === 'totals' && section.rows[i][0] === t('total')
-                ? 'print-grand-total'
-                : ''
+              section.warningRows?.includes(i)
+                ? 'print-discrepancy'
+                : section.id === 'totals' && section.rows[i][0] === t('total')
+                  ? 'print-grand-total'
+                  : ''
             }
           >
             {section.rows[i].map((cell, k) => (

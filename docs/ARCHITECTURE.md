@@ -21,7 +21,8 @@ Tauri documents approximately 127 MB of additional size for the bundled offline
 installer. A universally self-contained installer under 20 MB is consequently not a
 feasible requirement for this stack. [Tauri Windows installer documentation](https://v2.tauri.app/distribute/windows-installer/)
 
-The recorded NSIS installer is 3,713,278 bytes, below the 20 MB target. Total idle private
+The original NSIS candidate was 3,713,278 bytes; the latest Stage 5 candidate is
+3,933,560 bytes, below the 20 MB target (see `DEVELOPMENT.md` for hashes). Total idle private
 working set below 150 MB and cold start below 2 seconds remain unmeasured. Memory measurement
 includes the application and its WebView2 child processes. Cold start is measured from
 process creation to an interactive login screen on a documented reference PC, including
@@ -67,7 +68,8 @@ engine is shipped in the application.
 
 ## 3. Final folder structure
 
-This is the actual source tree at the stage 6 handoff. Dependencies, generated build
+This is the source tree after accounting, purchasing and plumbing improvement Stages 3–5, extending the original
+stage 6 handoff. Dependencies, generated build
 output, local databases and Git internals are excluded; all files shown exist.
 
 ```text
@@ -91,6 +93,9 @@ erp_plumbing_store/
 │   ├── BACKEND_API.md
 │   ├── DEVELOPMENT.md
 │   ├── FRONTEND.md
+│   ├── REPORTS_STAGE2.md
+│   ├── STAGES_3_4.md
+│   ├── STAGE5.md
 │   ├── PRINTING.md
 │   ├── WINDOWS_RELEASE.md
 │   └── schema.sql
@@ -126,6 +131,7 @@ erp_plumbing_store/
 │   │   └── store.ts
 │   ├── components/
 │   │   ├── AuditValue.tsx
+│   │   ├── ComponentLines.tsx
 │   │   ├── Form.tsx
 │   │   ├── ImportDialog.tsx
 │   │   ├── Payments.tsx
@@ -139,16 +145,21 @@ erp_plumbing_store/
 │   │   ├── dashboard/
 │   │   │   └── DashboardPage.tsx
 │   │   ├── documents/
+│   │   │   ├── BundlePicker.tsx
 │   │   │   ├── DocumentDetail.tsx
 │   │   │   ├── DocumentEditor.tsx
 │   │   │   ├── DocumentsPage.tsx
 │   │   │   ├── SourcePicker.tsx
 │   │   │   └── calculation.ts
 │   │   ├── finance/
+│   │   │   ├── ClosingPage.tsx
 │   │   │   ├── FinanceForms.tsx
-│   │   │   └── FinancePage.tsx
+│   │   │   ├── FinancePage.tsx
+│   │   │   ├── ReceivableAdjustmentsPage.tsx
+│   │   │   └── ReconciliationPage.tsx
 │   │   ├── inventory/
 │   │   │   ├── InventoryPage.tsx
+│   │   │   ├── QuarantineDialog.tsx
 │   │   │   └── StockRules.tsx
 │   │   ├── parties/
 │   │   │   └── PartiesPage.tsx
@@ -160,10 +171,16 @@ erp_plumbing_store/
 │   │   │   ├── print.css
 │   │   │   └── store.ts
 │   │   ├── products/
+│   │   │   ├── BulkPricesDialog.tsx
+│   │   │   ├── BundlesDialog.tsx
+│   │   │   ├── PlumbingProductDialog.tsx
 │   │   │   └── ProductsPage.tsx
 │   │   ├── purchasing/
-│   │   │   └── LandedCost.tsx
+│   │   │   ├── LandedCost.tsx
+│   │   │   ├── ProductPlanningDialog.tsx
+│   │   │   └── ReorderPage.tsx
 │   │   ├── reports/
+│   │   │   ├── ReportDrilldown.tsx
 │   │   │   ├── ReportsPage.tsx
 │   │   │   └── definitions.ts
 │   │   └── settings/
@@ -199,7 +216,12 @@ erp_plumbing_store/
 │   │   ├── 0005_detail_guards.sql
 │   │   ├── 0006_views.sql
 │   │   ├── 0007_reference_data.sql
-│   │   └── 0008_cost_attribution.sql
+│   │   ├── 0008_cost_attribution.sql
+│   │   ├── 0009_stock_balances.sql
+│   │   ├── 0010_report_access.sql
+│   │   ├── 0011_period_close_reconciliation.sql
+│   │   ├── 0012_purchasing_pricing.sql
+│   │   └── 0013_plumbing_inventory.sql
 │   ├── queries/
 │   │   └── aging.sql
 │   ├── seeds/
@@ -210,7 +232,8 @@ erp_plumbing_store/
 │   │   │   ├── printing.rs
 │   │   │   └── startup.rs
 │   │   ├── db/
-│   │   │   └── mod.rs
+│   │   │   ├── mod.rs
+│   │   │   └── stock.rs
 │   │   ├── models/
 │   │   │   ├── arithmetic.rs
 │   │   │   ├── mod.rs
@@ -219,20 +242,43 @@ erp_plumbing_store/
 │   │   │   ├── administration.rs
 │   │   │   ├── auth.rs
 │   │   │   ├── catalog.rs
+│   │   │   ├── closing.rs
 │   │   │   ├── costing.rs
 │   │   │   ├── documents.rs
 │   │   │   ├── files.rs
 │   │   │   ├── finance.rs
 │   │   │   ├── inventory.rs
 │   │   │   ├── mod.rs
+│   │   │   ├── plumbing.rs
+│   │   │   ├── pricing.rs
 │   │   │   ├── printing.rs
+│   │   │   ├── purchasing.rs
+│   │   │   ├── quarantine.rs
+│   │   │   ├── receivable_adjustments.rs
+│   │   │   ├── reconciliation.rs
 │   │   │   ├── reporting.rs
+│   │   │   ├── reports/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── financial.rs
+│   │   │   │   ├── stock.rs
+│   │   │   │   ├── drilldown.rs
+│   │   │   │   └── export.rs
 │   │   │   └── returns.rs
 │   │   ├── error.rs
 │   │   ├── lib.rs
 │   │   ├── main.rs
 │   │   └── state.rs
 │   ├── tests/
+│   │   ├── finance_close/
+│   │   │   └── mod.rs
+│   │   ├── inventory/
+│   │   │   └── mod.rs
+│   │   ├── plumbing/
+│   │   │   └── mod.rs
+│   │   ├── purchasing_pricing/
+│   │   │   └── mod.rs
+│   │   ├── reports/
+│   │   │   └── mod.rs
 │   │   └── backend.rs
 │   ├── windows/
 │   │   ├── Arabic.nsh
@@ -248,8 +294,11 @@ erp_plumbing_store/
 │   │   ├── numbers.test.ts
 │   │   └── printing.test.ts
 │   ├── ui/
+│   │   ├── finance.spec.ts
 │   │   ├── fixtures.ts
+│   │   ├── plumbing.spec.ts
 │   │   ├── printing.spec.ts
+│   │   ├── purchasing-pricing.spec.ts
 │   │   └── workflows.spec.ts
 │   ├── installer-hooks.nsi
 │   ├── test_release.py
@@ -317,6 +366,37 @@ sum exactly to the original minor-unit total. Never discard a rounding remainder
 Stock quantity and value come from the immutable stock ledger. There is no editable
 `products.stock` or `products.average_cost`. `standard_cost_minor` is a catalogue
 default and a validated fallback for explicitly permitted negative-stock issues.
+
+Migration 0009 adds `stock_balances`, keyed by `(product_id, warehouse_id)`, with
+`quantity_micros`, `value_minor` and `last_movement_id`. It backfills every existing
+ledger pool, including zero balances. This is a derived cache, with no editable balance
+API. An `AFTER INSERT` trigger applies each movement's exact signed deltas inside the
+same statement/transaction as the immutable ledger, journal, audit and command receipt.
+It also covers bulk reversals, zero-quantity revaluation, transfers, adjustments,
+stocktake and landed-cost preview savepoints; rollback restores the cache too.
+Integer-overflow guards run before addition, preventing SQLite REAL promotion.
+
+`inventory::pool()` now performs an indexed cache lookup. Negative-stock and backdating
+guards use that same pool and its last movement rather than scanning its entire history.
+Movement IDs must append in increasing order within a pool; normal generated IDs already
+do so. Zero pools retain their high-water mark and backdating protection. All other
+posting guards remain intact. Historical/report views continue reading posted ledger
+rows, and late-cost replay still reads history: neither uses the cache as historical data.
+
+Startup and backup/restore integrity checks independently stream the ledger ordered by
+product, warehouse and movement, using checked i128 arithmetic, and compare quantities,
+values and high-water IDs with the cache. Missing/extra rows also fail. Verification
+uses bounded memory and O(movements + pools) work, so startup checking still grows with
+history even though normal issue/receive lookups do not. Pre-upgrade backups of schema
+versions 1–8 remain supported. Missing cache tables in version 9 are errors.
+
+The read-only `stock_integrity` query runs the same comparison in a read snapshot,
+requires `inventory.verify` in Rust, and returns checked pool/movement counts. The
+permission is granted to admin, storekeeper and accountant. A mismatch returns Arabic
+`stock_balance_mismatch`; startup opens recovery mode, and a maintenance failure also
+revokes the session/import grants and enables recovery. There is no silent rebuild or
+ledger edit. See the new inventory verification section in [DEVELOPMENT.md](DEVELOPMENT.md)
+for the 200,000-movement regression benchmark and its limits.
 
 Maintain weighted-average cost per product and warehouse. If quantity is `Q` micros
 and value is `V` minor units, an issue of `q` micros costs `round(V*q/Q)`. When issuing
@@ -432,6 +512,35 @@ Negative settlement rows undo an exact previous match. Historical aging includes
 documents and settlements effective by `as_of`, separates unapplied credits, and uses
 nonoverlapping buckets: not due, 0–30, 31–60, 61–90, and over 90 days.
 
+### Read-only reporting improvement Stage 2
+
+`services/reports/` implements balance sheet, whole-store inventory reconciliation,
+ABC/activity/quantity-aging/turnover analysis, discounts, period VAT and collections.
+They share the existing read transaction, integer-string transport and immutable-ledger
+views. Reports at a past date use the ledger, not today's cached balances. Reversals
+remain signed events on their own dates. Historical settlements exclude later matches.
+
+The user approved **net-sales postings unchanged** and **deferral of warehouse-specific
+accounting reconciliation** until journal lines have a warehouse dimension. No inferred
+warehouse allocation is presented. Whole-store stock and inventory-account sums remain
+independent, with differences highlighted and document-level drill-down.
+
+The balance sheet presents posted equity plus separately calculated prior unclosed and
+current-period results. Stock aging estimates residence duration with oldest-entry
+consumption, not physical lots or a change to weighted-average costs. Every inbound event
+starts an analytical age; deficits are separate. Turnover uses endpoint-average valuation
+and exact thousandths. Full formulas and boundaries are in [REPORTS_STAGE2.md](REPORTS_STAGE2.md).
+
+Migration 0010 only adds read/export permissions for administrator/accountant. Native
+exports recheck permission after file selection, reject overwrites and bound output to
+10,000 rows; print snapshots use the same bound. A successful export audits its filters;
+queries never append mutation receipts or financial rows. CSV/XLSX money and quantities
+are decimal strings, preserving values beyond JavaScript/Excel numeric precision. XLSX
+uses RTL, frozen headings and discrepancy styling; CSV neutralizes formula prefixes.
+Screen and print formatting follow the chosen digit style; tabular file exports use
+Western digits. The details modal is lazy-loaded and opens source documents/journals
+without edit/post actions. No runtime dependency is added.
+
 ## 7. Schema coverage and integrity responsibilities
 
 | Area | Tables and views |
@@ -439,7 +548,7 @@ nonoverlapping buckets: not due, 0–30, 31–60, 61–90, and over 90 days.
 | Access | users, roles, permissions, user_roles, role_permissions |
 | Store and periods | store_settings, fiscal_periods, document_types, number_sequences |
 | Catalogue | categories, units, products, product_units, product_search |
-| Warehouses | warehouses, warehouse_product_settings, stock_movements, stocktake_lines |
+| Warehouses | warehouses, warehouse_product_settings, stock_movements, stock_balances, stocktake_lines |
 | Parties | parties, journal_lines, settlements, v_party_open_items, v_party_balances |
 | Shared documents | documents, document_lines, document_events |
 | Purchasing/receiving | receipt_lines, purchase_matches, landed_charges, landed_allocations, v_purchase_order_progress |
@@ -570,7 +679,7 @@ backup or restore action. Passwords and session material must never appear in au
 
 Store files under the Tauri application-local-data directory, using one database per
 store. Keep backups outside the live database directory. On startup perform SQLite
-`quick_check` and `foreign_key_check` before enabling writes; run full `integrity_check`
+`quick_check`, `foreign_key_check` and stock-cache reconciliation before enabling writes; run full `integrity_check`
 for backups, restores, migration verification and on-demand maintenance. An integrity
 failure opens recovery mode, not a newly empty store. Profile check latency as data grows.
 
@@ -587,7 +696,179 @@ pre-restore backup, then replace the store directory atomically with rollback re
 on failure. Keep all staging/replacement operations on the same volume. The UI reports
 unavailable USB targets and disk-full failures in Arabic and preserves the live store.
 
-## 11. Validation and delivery gates
+## 11. Accounting and purchasing improvements
+
+### Accounting improvement stage 3 (migration 0011)
+
+`closing`, `receivable_adjustments` and `reconciliation` use the same authorized
+`App::mutate` transaction, audit and idempotency receipt as stock postings. New
+document kinds preserve posted-document and journal immutability. No new runtime
+dependencies or network services were added. Finance pages are lazy chunks.
+
+Year-end preview hashes the selected period, next period and income/expense balances.
+The first close posts at the end of an open fiscal period, transfers all unclosed
+income/expense balances through that date to retained earnings and locks the period
+in the same transaction. The immediately following contiguous period must exist and
+be open. A second active close is forbidden. Reversal requires the dedicated admin
+permission and a date inside that next open period; later active closes must be
+reversed first. The original period remains locked. An administrator may explicitly
+unlock it after reversing the close. Reclosing is dated in the next period, includes
+the subject period's later closing/reversal entries, and excludes unrelated next-period
+operations. P&L excludes closing entries and their reversals; trial balance and
+balance sheet include their actual accounting effects. SQL also prevents unlocking
+a period with an active close and reversing outside the permitted next period.
+Balance-sheet prior/current results classify a close and its reversal by the subject
+period's end, while still excluding entries posted after the report's as-of date.
+The corresponding drill-down follows the same classification and displays actual
+document dates. Reopening last year's profit therefore cannot inflate this year's result.
+
+Customer bad-debt, financial credit-note and settlement-discount documents credit
+an existing customer receivable and allocate that credit to one selected open debit.
+They debit bad-debt expense, sales returns or the existing sales-discounts account,
+respectively. They neither move goods nor automatically change VAT. Amount, reason,
+date, residual debt and specific permissions are checked in Rust; later settlements
+prevent a backdated adjustment. Reversal unallocates and reverses the journal without
+editing the original. Invoice discounts continue to use net-sales posting.
+
+Bank/cash statements store immutable headers and up to 5,000 frozen lines. Opening
+plus signed line amounts must equal closing. Canonical content hashes reject duplicate
+imports even with a different reference. Statement references are unique per cash
+account; a correction voids an unmatched statement and creates a corrected statement
+with a new reference. Matching supports multiple partial allocations in either
+direction; account, sign, dates and both remaining amounts must agree. Unmatching
+adds an exact negative event, never updates an old match. Every match/unmatch/void is
+a `bank_match` document. Active matches block reversal of the underlying journal
+document. A cash account's ledger mapping cannot change once used by a statement.
+The displayed difference is statement closing minus book balance at statement end;
+unmatched totals are absolute amounts, not an invented balancing journal. Candidate
+rows and match status reflect current reconciliation state. Past-dated book balance
+still includes all postings dated through the statement end.
+
+CSV is parsed in Rust after user file selection (UTF-8, at most 2 MB), with exact
+decimal amounts at configured currency precision and ISO dates. Import is a preview;
+saving revalidates the complete typed statement atomically. Queries paginate to 200
+rows; UI pages use 50. Document detail and print snapshots include closing, source
+receivable or bank-match references alongside the journal and reason.
+
+### Purchasing and pricing stage 4 (migration 0012)
+
+`purchasing` and `pricing` use the existing query/read transaction and mutation/audit/
+idempotency pipeline. The migration adds permissions, product planning, pricing policy
+and immutable evidence tables; it does not alter earlier migration checksums or stock
+and account history. New screens are lazy-loaded and introduce no dependencies.
+
+`supplier_price_history` freezes raw net value (after both discounts, before VAT),
+purchase/base quantities and the unit name from each posted purchase line. An AFTER
+posting trigger appends new rows; migration backfill copies already-posted invoices.
+Reversal leaves the history intact, with derived reversed status. Last purchase cost
+is calculated with checked integer arithmetic from the latest non-reversed invoice by
+document date/line ID; absence is null, never a fabricated last cost. It excludes landed
+costs. History supports supplier-invoice drill-down and cursor pagination.
+
+Planning stores default supplier, reorder point, maximum level, lead time in days and
+integer grams per base unit, with optimistic revisions. For each selected warehouse:
+
+- `velocity = max(0, net sold base micros) / lookback_days`, including dated sales,
+  returns and reversals in the inclusive analysis window (1–365 days).
+- `position = current stock + outstanding draft/approved purchase-order quantity`;
+  accepted unreversed receipts reduce outstanding orders. Drafts count to avoid duplicates.
+- `trigger = max(reorder point, ceil(velocity × lead days))`;
+  `target = max(maximum level, ceil(velocity × (lead days + coverage days)))`.
+- Suggest `max(0, target − position)` only when `position <= trigger`. Ceilings use
+  integer micros. Coverage is 1–365 days; lead time is 0–3650 days.
+
+The through date controls the sales window and proposed document date; stock, open
+orders and prices are current, not historical snapshots. Selected suggestions (at most
+200) are hashed and rechecked inside the mutation. One draft order is created per active
+default supplier, using the active base unit and that supplier's latest purchase cost,
+or standard cost if no invoice exists. Draft prices/taxes require normal review and
+approval. All drafts are created atomically; nothing is posted or reserved.
+
+Margin is `(net sale − actual issue cost) / net sale`, before VAT and after line and
+allocated invoice discounts. The minimum is 0–10000 basis points. Even at zero, a sale
+below cost requires existing `sales.discount` permission and a reason. The guard runs
+after each actual weighted-average issue inside the posting transaction; rejection
+rolls back stock, journal, audit and receipt together. `sale_margin_checks` preserves
+cost, net, policy and override actor/reason at posting; later revaluations do not rewrite
+it. POS previews simulate sequential issues, including duplicate products, and remain
+advisory when stock is insufficient or subsequently changes. Zero-price lines require
+override when cost is positive or the minimum is positive. Returns keep original logic.
+
+Bulk prices select up to 500 active units. Percentage change applies to existing retail,
+wholesale or both prices; cost markup applies to current store-wide weighted cost per
+unit (standard cost fallback when no positive pool exists). This markup is a percentage
+of cost, distinct from the sales-margin percentage. Half-up checked integer rounding is
+used; preview hashes include old prices, cost and product revisions. An audited batch
+stores immutable before/after prices and rule, updates unit prices and increments each
+product's revision once. Any failure rolls back the entire batch. No posted invoice changes.
+
+Landed costs support explicit manual shares and automatic value, base quantity or
+weight allocation, up to 1000 receipt lines. Value uses original receipt net value;
+weight uses accepted base micros × configured grams (positive weight required). The
+existing largest-remainder allocator conserves every minor unit with stable line-ID
+tie-breaking. Automatic previews are hashed and revalidated before the existing
+`inventory::landed` / `revalue` pipeline updates stock valuation and sold-item COGS.
+`landed_charges.allocation_basis` retains the legacy explicit-share value `manual`;
+`landed_calculations` is the authoritative frozen automatic method, weights and shares.
+Detail and print snapshots display the actual method. The original manual API remains
+compatible. No ledger is edited and all records share the same transaction.
+
+### Plumbing inventory stage 5 (migration 0013)
+
+The new `plumbing` and `quarantine` services share the existing transaction, audit and
+idempotency boundary. No earlier migration, posted value or historical warranty is
+rewritten. Five new permissions cover variants, bundle maintenance, warranties,
+quarantine movements and warehouse classification. Admin receives all; storekeeper
+receives the first four. Existing product-write and transfer permissions also apply.
+
+Variants are independent products created in one batch of at most 100 size/material
+combinations from an active product template. Rust validates unique codes, base-unit
+barcodes and family combinations and hashes the template, active units, planning and
+requested rows. Applying rechecks that preview. Category, brand, base unit, active unit
+conversions/prices, standard cost, minimum stock, warranty and planning are copied.
+Images, stock, warehouse locations and alternate-unit barcodes are not copied. Each
+variant has an immutable template/revision/size/material link; changing its size or
+material requires a new product. Prices and names remain editable. No stock is created.
+
+Sales bundles are editable non-stock templates of 1–100 unique real product units.
+No nested kit can be represented. Rust expands selected-unit quantities with checked
+`i128` rational conversion and rejects a fractional micro rather than rounding it.
+Current retail/wholesale unit prices determine the component subtotal before tax and
+discounts. The POS preview adds ordinary editable component lines, with a bundle-name
+note; the cashier reviews quantities, VAT and prices before saving. There is no separate
+kit price, reservation or parent stock line. Later recipe edits cannot alter saved
+component lines. Normal posting, margin guards, costing, landed-cost replay, partial
+component returns and reversal apply unchanged. Inactive kits/components cannot expand;
+an inactive component does not prevent disabling its kit.
+
+`warranty_days` is nullable (1–36500). It snapshots into newly inserted sale/quotation
+lines; linked returns take the original value, including null. Quotation conversion
+explicitly preserves the quoted values. Editing a draft recreates its lines using
+current product terms; once posted, normal immutable-line guards apply. Catalogue
+changes never rewrite old documents. A4 and thermal templates show the frozen term
+beside the item using the selected digit style. Existing documents remain without
+warranty until a new draft line is created; the migration does not invent old terms.
+
+Shelf and bin locations are per product/warehouse. The new optional `shelf` API field
+preserves an existing shelf when omitted/null, while an empty string clears it. Inventory
+shows total quantity/value, active non-quarantine quantity and quarantine quantity.
+Quarantined owned goods remain in financial valuation. Available quantity is physical
+non-quarantine stock, not a reservation/ATP calculation; draft sales reserve nothing.
+
+Warehouses have an independently revised quarantine classification. Sales are blocked
+in Rust and SQL even when negative stock is enabled. Transfers involving quarantine
+require the dedicated permission and a reason, including the generic transfer screen.
+The focused isolate/release command creates and posts an ordinary transfer atomically;
+it requires one normal warehouse and one quarantine warehouse. Historical classification
+flags are appended in immutable `quarantine_transfers`, used for detail/print and
+reversal authorization. Removing quarantine classification requires every cached pool
+to have zero quantity and value. Other outgoing movements require the quarantine
+permission and a reason; stock adjustments/returns continue to use their own document
+and fiscal guards. Generic reversal cannot bypass the quarantine permission. Warehouse
+classification changes refresh the shared pickers immediately. Damaged/short quantities
+on a goods receipt still mean unaccepted goods and never create owned quarantine stock.
+
+## 12. Validation and delivery gates
 
 Stage 1 tests apply the actual SQL to independent databases and exercise valid postings
 and adversarial writes, including atomic rollback, reversal, quantity limits, historical

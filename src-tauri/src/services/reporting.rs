@@ -15,9 +15,23 @@ fn read_permission(kind: &str) -> Result<&'static str> {
         "goods_receipt" | "transfer" | "adjustment" | "stocktake" | "opening_stock" => {
             "inventory.read"
         }
-        "receipt_voucher" | "payment_voucher" | "manual_journal" | "opening_balance"
-        | "cash_transfer" | "expense" | "settlement" | "cheque_clear" | "cheque_bounce"
-        | "cash_close" | "cost_adjustment" | "reversal" => "finance.read",
+        "receipt_voucher"
+        | "payment_voucher"
+        | "manual_journal"
+        | "opening_balance"
+        | "cash_transfer"
+        | "expense"
+        | "settlement"
+        | "cheque_clear"
+        | "cheque_bounce"
+        | "cash_close"
+        | "cost_adjustment"
+        | "reversal"
+        | "year_end_close"
+        | "bad_debt"
+        | "customer_credit"
+        | "settlement_discount"
+        | "bank_match" => "finance.read",
         _ => return Err(Error::validation("نوع المستند غير صالح")),
     })
 }
@@ -26,6 +40,87 @@ fn limit(value: u16) -> i64 {
 }
 pub fn query(db: &Connection, a: &Actor, q: &Query) -> Result<Value> {
     match q {
+        Query::VariantPreview {
+            template_id,
+            variants,
+        } => super::plumbing::variant_preview(db, a, template_id.0, variants),
+        Query::ProductVariants {
+            template_id,
+            after_id,
+            limit,
+        } => super::plumbing::variants(db, a, template_id.0, after_id.0, *limit),
+        Query::Bundles {
+            search,
+            after_id,
+            limit,
+        } => super::plumbing::bundles(db, a, search, after_id.0, *limit),
+        Query::Bundle { id } => super::plumbing::bundle(db, a, id.0),
+        Query::ExpandBundle {
+            id,
+            quantity,
+            wholesale,
+        } => super::plumbing::expand(db, a, id.0, quantity.0, *wholesale),
+        Query::ProductPlanning { product_id } => super::purchasing::planning(db, a, product_id.0),
+        Query::PricingPolicy => super::pricing::policy(db, a),
+        Query::SupplierPrices {
+            product_id,
+            after_id,
+            limit,
+        } => super::purchasing::prices(db, a, product_id.0, after_id.0, *limit),
+        Query::ReorderSuggestions {
+            filter,
+            after_id,
+            limit,
+        } => super::purchasing::reorder(db, a, filter, after_id.0, *limit),
+        Query::SuggestedOrdersPreview {
+            filter,
+            product_ids,
+        } => super::purchasing::preview_orders(db, a, filter, product_ids),
+        Query::PriceUnits {
+            search,
+            after_id,
+            limit,
+        } => super::pricing::units(db, a, search, after_id.0, *limit),
+        Query::PricePreview { unit_ids, rule } => super::pricing::preview(db, a, unit_ids, rule),
+        Query::SaleMargins {
+            warehouse_id,
+            lines,
+            discount,
+        } => super::pricing::margins(db, a, warehouse_id.0, lines, discount.0),
+        Query::LandedPreview {
+            basis,
+            amount,
+            receipt_line_ids,
+        } => super::purchasing::preview_landed(db, a, *basis, amount.0, receipt_line_ids),
+        Query::ClosingPreview { period_id, date } => {
+            super::closing::preview(db, a, period_id.0, date)
+        }
+        Query::BankStatements { after_id, limit } => {
+            super::reconciliation::list(db, a, after_id.0, *limit)
+        }
+        Query::ParseStatementCsv { csv } => super::reconciliation::parse_csv(db, a, csv),
+        Query::Reconciliation {
+            statement_id,
+            view,
+            limit,
+            offset,
+        } => super::reconciliation::query(db, a, statement_id.0, *view, *limit, *offset),
+        Query::CustomerOpenItems {
+            search,
+            after_id,
+            limit,
+        } => super::receivable_adjustments::open_items(db, a, search, after_id.0, *limit),
+        Query::ReportDrilldown {
+            filter,
+            key,
+            limit,
+            offset,
+        } => super::reports::drilldown(db, a, filter, key, *limit, *offset),
+        Query::StockIntegrity => {
+            a.require("inventory.verify")?;
+            let (pools, movements) = db::verify_stock_balances(db)?;
+            Ok(json!({"pools":Int(pools),"movements":Int(movements)}))
+        }
         Query::PrintSnapshot { source } => super::printing::snapshot(db, a, source),
         Query::Bootstrap => {
             let mut value = json!({"authenticated":true,"setup_required":false,"permissions":a.permissions,"user_id":Int(a.user_id)});
@@ -111,7 +206,7 @@ pub fn query(db: &Connection, a: &Actor, q: &Query) -> Result<Value> {
         Query::Product { id } => {
             a.require("products.read")?;
             Ok(
-                json!({"product":db::rows(db,"SELECT * FROM products WHERE id=?1",[id])?,"warehouse_settings":db::rows(db,"SELECT * FROM warehouse_product_settings WHERE product_id=?1",[id])?,"units":db::rows(db,"SELECT pu.*,u.name_ar FROM product_units pu JOIN units u ON u.id=pu.unit_id WHERE product_id=?1 ORDER BY pu.id",[id])?}),
+                json!({"product":db::rows(db,"SELECT p.*,v.template_product_id FROM products p LEFT JOIN product_variants v ON v.product_id=p.id WHERE p.id=?1",[id])?,"warehouse_settings":db::rows(db,"SELECT * FROM warehouse_product_settings WHERE product_id=?1",[id])?,"units":db::rows(db,"SELECT pu.*,u.name_ar FROM product_units pu JOIN units u ON u.id=pu.unit_id WHERE product_id=?1 ORDER BY pu.id",[id])?}),
             )
         }
         Query::Parties {
@@ -149,7 +244,7 @@ pub fn query(db: &Connection, a: &Actor, q: &Query) -> Result<Value> {
             let kind: String =
                 db.query_row("SELECT kind FROM documents WHERE id=?1", [id], |r| r.get(0))?;
             a.require(read_permission(&kind)?)?;
-            let mut value = json!({"header":db::rows(db,"SELECT * FROM documents WHERE id=?1",[id])?,"lines":db::rows(db,"SELECT * FROM document_lines WHERE document_id=?1 ORDER BY line_number",[id])?});
+            let mut value = json!({"header":db::rows(db,"SELECT d.*,q.from_quarantine,q.to_quarantine FROM documents d LEFT JOIN quarantine_transfers q ON q.document_id=d.id WHERE d.id=?1",[id])?,"lines":db::rows(db,"SELECT * FROM document_lines WHERE document_id=?1 ORDER BY line_number",[id])?});
             for (table, key) in [
                 ("payment_legs", "payments"),
                 ("stocktake_lines", "counts"),
@@ -193,6 +288,39 @@ pub fn query(db: &Connection, a: &Actor, q: &Query) -> Result<Value> {
                 [id]
             )?);
             if a.permissions.contains("finance.read") {
+                value["finance_context"] = json!(match kind.as_str() {
+                    "landed_cost" => db::rows(
+                        db,
+                        "SELECT COALESCE(c.basis,ch.allocation_basis) AS allocation_basis,ch.amount_minor FROM landed_charges ch LEFT JOIN landed_calculations c ON c.document_id=ch.document_id WHERE ch.document_id=?1",
+                        [id]
+                    )?,
+                    "year_end_close" => db::rows(
+                        db,
+                        "SELECT p.name AS period_name,p.starts_on,p.ends_on,c.result_minor FROM year_closings c JOIN fiscal_periods p ON p.id=c.period_id WHERE c.document_id=?1",
+                        [id]
+                    )?,
+                    "bad_debt" | "customer_credit" | "settlement_discount" => db::rows(
+                        db,
+                        "SELECT a.source_debit_line_id,j.document_id AS source_document_id,d.number AS source_document_number,a.amount_minor FROM receivable_adjustments a JOIN journal_lines j ON j.id=a.source_debit_line_id JOIN documents d ON d.id=j.document_id WHERE a.document_id=?1",
+                        [id]
+                    )?,
+                    "bank_match" => {
+                        let mut rows = db::rows(
+                            db,
+                            "SELECT s.reference AS statement_reference,l.line_number,l.value_date,m.journal_line_id,j.document_id AS source_document_id,d.number AS source_document_number,m.amount_minor,m.reversal_of_id FROM reconciliation_matches m JOIN bank_statement_lines l ON l.id=m.statement_line_id JOIN bank_statements s ON s.id=l.statement_id JOIN journal_lines j ON j.id=m.journal_line_id JOIN documents d ON d.id=j.document_id WHERE m.document_id=?1",
+                            [id],
+                        )?;
+                        if rows.is_empty() {
+                            rows = db::rows(
+                                db,
+                                "SELECT s.reference AS statement_reference,s.starts_on,s.ends_on FROM bank_statement_voids v JOIN bank_statements s ON s.id=v.statement_id WHERE v.document_id=?1",
+                                [id],
+                            )?;
+                        }
+                        rows
+                    }
+                    _ => Vec::new(),
+                });
                 value["journal"] = json!(db::rows(
                     db,
                     "SELECT j.*,ac.name_ar AS account_name,ac.code AS account_code,p.name_ar AS party_name FROM journal_lines j JOIN accounts ac ON ac.id=j.account_id LEFT JOIN parties p ON p.id=j.party_id WHERE j.document_id=?1 ORDER BY j.id",
@@ -214,7 +342,7 @@ pub fn query(db: &Connection, a: &Actor, q: &Query) -> Result<Value> {
             a.require("inventory.read")?;
             Ok(json!(db::rows(
                 db,
-                "SELECT p.id AS product_id,p.code,p.name_ar,?2 AS warehouse_id,CASE WHEN ?2 IS NULL THEN 'كل المخازن' ELSE MAX(w.name_ar) END AS warehouse_name,COALESCE(SUM(s.quantity_micros),0) AS quantity_micros,COALESCE(SUM(s.value_minor),0) AS value_minor FROM products p CROSS JOIN warehouses w LEFT JOIN v_stock_on_hand s ON s.product_id=p.id AND s.warehouse_id=w.id WHERE p.id>?1 AND (?2 IS NULL OR w.id=?2) GROUP BY p.id ORDER BY p.id LIMIT ?3",
+                "SELECT p.id AS product_id,p.code,p.name_ar,?2 AS warehouse_id,CASE WHEN ?2 IS NULL THEN 'كل المخازن' ELSE MAX(w.name_ar) END AS warehouse_name,COALESCE(SUM(s.quantity_micros),0) AS quantity_micros,COALESCE(SUM(s.value_minor),0) AS value_minor,COALESCE(SUM(CASE WHEN w.is_quarantine=1 THEN s.quantity_micros ELSE 0 END),0) AS quarantine_quantity_micros,COALESCE(SUM(CASE WHEN w.is_quarantine=0 AND w.active=1 THEN s.quantity_micros ELSE 0 END),0) AS available_quantity_micros,CASE WHEN ?2 IS NULL THEN NULL ELSE MAX(b.shelf_location) END AS shelf_location,CASE WHEN ?2 IS NULL THEN NULL ELSE MAX(b.bin_location) END AS bin_location FROM products p CROSS JOIN warehouses w LEFT JOIN v_stock_on_hand s ON s.product_id=p.id AND s.warehouse_id=w.id LEFT JOIN warehouse_product_settings b ON b.product_id=p.id AND b.warehouse_id=w.id WHERE p.id>?1 AND (?2 IS NULL OR w.id=?2) GROUP BY p.id ORDER BY p.id LIMIT ?3",
                 params![after_id, warehouse_id, limit(*l)]
             )?))
         }
@@ -302,7 +430,7 @@ pub(crate) fn report(
             "SELECT account_id,account_code,account_name,SUM(CASE WHEN document_date<?1 THEN debit_minor-credit_minor ELSE 0 END) opening_minor,SUM(CASE WHEN document_date>=?1 THEN debit_minor ELSE 0 END) debit_minor,SUM(CASE WHEN document_date>=?1 THEN credit_minor ELSE 0 END) credit_minor,SUM(debit_minor-credit_minor) closing_minor FROM v_journal WHERE document_date<=?2 GROUP BY account_id ORDER BY account_code"
         }
         Report::IncomeStatement => {
-            "SELECT account_id,account_code,account_name,account_kind,SUM(credit_minor-debit_minor) profit_signed_minor FROM v_journal WHERE document_date BETWEEN ?1 AND ?2 AND account_kind IN ('income','expense') GROUP BY account_id ORDER BY account_code"
+            "SELECT account_id,account_code,account_name,account_kind,SUM(credit_minor-debit_minor) profit_signed_minor FROM v_journal WHERE document_date BETWEEN ?1 AND ?2 AND account_kind IN ('income','expense') AND document_kind<>'year_end_close' AND document_id NOT IN (SELECT r.id FROM documents r JOIN year_closings c ON c.document_id=r.reversal_of_id) GROUP BY account_id ORDER BY account_code"
         }
         Report::CashFlow => {
             "SELECT document_date,document_kind,cash_account_id,SUM(cash_in_minor) cash_in_minor,SUM(cash_out_minor) cash_out_minor FROM v_cash_flow WHERE document_date BETWEEN ?1 AND ?2 GROUP BY document_date,document_kind,cash_account_id ORDER BY document_date"
@@ -345,6 +473,19 @@ pub(crate) fn report(
             "SELECT * FROM cash_shifts WHERE substr(opened_at,1,10) BETWEEN ?1 AND ?2 ORDER BY id"
         }
         Report::Aging => unreachable!(),
+        _ => {
+            return super::reports::run(
+                db,
+                &ReportFilter {
+                    report: r,
+                    from: from.into(),
+                    to: to.into(),
+                    party_id: party.map(Int),
+                },
+                limit,
+                offset,
+            );
+        }
     };
     // Keep all five positions present even for reports that do not use a date/party filter.
     let wrapped = if matches!(r, Report::PartyStatement) {

@@ -2,7 +2,7 @@ import { s, type Row, type PrintSnapshot } from '../../api/client';
 import type { PrintSource } from '../../api/contracts';
 import { columnLabel, enumLabel, t } from '../../i18n';
 import { baseQuantity, displayDate, formatDecimal, localDigits } from '../../lib/numbers';
-import { reportColumns } from '../reports/definitions';
+import { reportColumns, enhancedReports } from '../reports/definitions';
 
 export type PrintLayout = 'a4' | 'landscape' | 'thermal80' | 'labels';
 export interface PrintSection {
@@ -11,6 +11,7 @@ export interface PrintSection {
   headers: string[];
   widths?: number[];
   rows: string[][];
+  warningRows?: number[];
 }
 export interface PrintModel {
   title: string;
@@ -37,7 +38,7 @@ export function printFormat(snapshot: PrintSnapshot) {
     number: (v: string | number) => localDigits(String(v), arabic),
     cell: (row: Row, key: string): string => {
       const v = s(row, key);
-      if (!v) return '—';
+      if (!v) return key === 'tax_rate_bps' ? t('unclassifiedVat') : '—';
       const table: Record<string, string> = {
         warehouse_id: 'warehouses',
         cash_account_id: 'cash_accounts',
@@ -54,6 +55,7 @@ export function printFormat(snapshot: PrintSnapshot) {
         [
           'kind',
           'document_kind',
+          'allocation_basis',
           'account_kind',
           'control_kind',
           'movement_type',
@@ -61,12 +63,17 @@ export function printFormat(snapshot: PrintSnapshot) {
           'status',
           'progress',
           'method',
+          'stock_class',
+          'stock_activity',
+          'vat_side',
         ].includes(key)
       )
         return enumLabel(v);
       if (/^-?\d+$/.test(v)) {
         if (key.endsWith('_minor')) return formatDecimal(v, digits, arabic);
         if (key.endsWith('_micros')) return decimal(v);
+        if (key.endsWith('_bps')) return `${decimal(v, 2)}%`;
+        if (key.endsWith('_milli')) return decimal(v, 3);
         return localDigits(v, arabic);
       }
       if (/^\d{4}-\d\d-\d\d/.test(v) && (key.endsWith('_date') || key.endsWith('_at')))
@@ -129,6 +136,17 @@ export function buildPrintModel(
     add('partyTaxNumber', s(h, 'party_tax_number_snapshot'));
     add('warehouse', s(ctx, 'warehouse_name'));
     add('destination', s(ctx, 'destination_name'));
+    if (h.from_quarantine === '1' || h.to_quarantine === '1')
+      add(
+        'quarantineMovement',
+        t(
+          h.from_quarantine === '1'
+            ? h.to_quarantine === '1'
+              ? 'quarantineInternal'
+              : 'releaseGoods'
+            : 'quarantineGoods',
+        ),
+      );
     add('sourceDocument', s(ctx, 'source_number'));
     add('operator', s(ctx, 'operator_name'));
     if (d.lines.length) {
@@ -139,7 +157,12 @@ export function buildPrintModel(
           ? ['productName', 'quantity', 'price', 'total']
           : ['productName', 'unit', 'quantity', 'price', 'discount', 'tax', 'total'];
       const rows = d.lines.map((l) => {
-        const name = [s(l, 'product_name_snapshot'), s(l, 'product_code_snapshot'), s(l, 'notes')]
+        const name = [
+          s(l, 'product_name_snapshot'),
+          s(l, 'product_code_snapshot'),
+          s(l, 'notes'),
+          l.warranty_days ? `${t('warrantyDays')}: ${f.number(l.warranty_days)}` : '',
+        ]
           .filter(Boolean)
           .join('\n');
         const discount = (
@@ -272,6 +295,15 @@ export function buildPrintModel(
           ];
         }),
       });
+    if (d.finance_context?.length) {
+      const keys = Object.keys(d.finance_context[0]);
+      model.sections.push({
+        id: 'finance-context',
+        title: t('financeContext'),
+        headers: [t('description'), t('value')],
+        rows: d.finance_context.flatMap((r) => keys.map((k) => [columnLabel(k), f.cell(r, k)])),
+      });
+    }
     if (!d.lines.length && !stock && d.journal.length)
       model.sections.push({
         id: 'journal',
@@ -316,7 +348,18 @@ export function buildPrintModel(
       if (['low_stock', 'open_items'].includes(source.report))
         add('reportScope', t('currentSnapshot'));
       else if (
-        ['valuation', 'receivables', 'payables', 'aging', 'trial_balance'].includes(source.report)
+        [
+          'valuation',
+          'receivables',
+          'payables',
+          'aging',
+          'trial_balance',
+          'balance_sheet',
+          'inventory_reconciliation',
+          'stock_activity',
+          'stock_aging',
+          'collections',
+        ].includes(source.report)
       )
         add('asOf', f.date(source.to));
       else {
@@ -325,6 +368,10 @@ export function buildPrintModel(
       }
     }
     add(card ? 'productName' : 'party', s(snapshot.context[0], 'name_ar'));
+    if (!card && enhancedReports.includes(source.report))
+      model.sections.push(
+        ...textSections('method', t('reportScope'), t(`reportHints.${source.report}`)),
+      );
     if (card) add('warehouse', s(snapshot.context[0], 'warehouse_name'));
     if (snapshot.opening.length)
       model.sections.push({
@@ -350,7 +397,20 @@ export function buildPrintModel(
       title: '',
       headers: columns.map(columnLabel),
       rows: snapshot.rows.map((r) => columns.map((c) => f.cell(r, c))),
+      warningRows: snapshot.rows.flatMap((r, i) =>
+        r.difference_minor && r.difference_minor !== '0' ? [i] : [],
+      ),
     });
+    if (snapshot.summary?.length)
+      model.sections.push({
+        id: 'reportSummary',
+        title: t('reportTotals'),
+        headers: [],
+        rows: snapshot.summary.map((r) => [t(s(r, 'metric')), f.money(r.amount_minor)]),
+        warningRows: snapshot.summary.flatMap((r, i) =>
+          r.metric === 'reconciliationDifference' && r.amount_minor !== '0' ? [i] : [],
+        ),
+      });
     const totals: Record<string, string[]> = {
       trial_balance: ['opening_minor', 'debit_minor', 'credit_minor', 'closing_minor'],
       income_statement: ['profit_signed_minor'],

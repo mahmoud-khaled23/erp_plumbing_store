@@ -9,12 +9,14 @@ use crate::{
     models::*,
     state::Actor,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn pool(db: &Connection, product: i64, warehouse: i64) -> Result<Pool> {
-    Ok(db.query_row("SELECT COALESCE(SUM(quantity_micros),0),COALESCE(SUM(value_minor),0) FROM stock_movements WHERE product_id=?1 AND warehouse_id=?2",params![product,warehouse],|r|Ok(Pool{quantity:r.get(0)?,value:r.get(1)?}))?)
+    Ok(db.prepare_cached("SELECT quantity_micros,value_minor FROM stock_balances WHERE product_id=?1 AND warehouse_id=?2")?
+        .query_row(params![product,warehouse], |r| Ok(Pool { quantity:r.get(0)?, value:r.get(1)? }))
+        .optional()?.unwrap_or_default())
 }
 pub fn movement(
     db: &Connection,
@@ -28,12 +30,15 @@ pub fn movement(
     kind: &str,
     reversal: Option<i64>,
 ) -> Result<i64> {
+    if qty < 0 && super::quarantine::classified(db, warehouse)? {
+        a.require("inventory.quarantine")?;
+    }
     let cost = if qty == 0 {
         0
     } else {
         prorate(value.abs(), 1_000_000_000_000, qty.abs())?
     };
-    db.execute("INSERT INTO stock_movements(document_id,document_line_id,product_id,warehouse_id,movement_type,quantity_micros,value_minor,unit_cost_micropiastres,reverses_movement_id,reason,created_by) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,(SELECT reason FROM documents WHERE id=?1),?10)",params![doc,line,product,warehouse,kind,qty,value,cost,reversal,a.user_id])?;
+    db.prepare_cached("INSERT INTO stock_movements(document_id,document_line_id,product_id,warehouse_id,movement_type,quantity_micros,value_minor,unit_cost_micropiastres,reverses_movement_id,reason,created_by) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,(SELECT reason FROM documents WHERE id=?1),?10)")?.execute(params![doc,line,product,warehouse,kind,qty,value,cost,reversal,a.user_id])?;
     Ok(db.last_insert_rowid())
 }
 pub fn issue(

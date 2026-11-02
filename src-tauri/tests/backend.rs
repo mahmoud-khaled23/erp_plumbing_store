@@ -5,6 +5,12 @@ use tempfile::TempDir;
 
 const DAY: &str = "2026-10-27";
 
+mod finance_close;
+mod inventory;
+mod plumbing;
+mod purchasing_pricing;
+mod reports;
+
 #[test]
 fn print_snapshots_preserve_history_and_never_change_ledgers() {
     let f = Fixture::new();
@@ -272,7 +278,8 @@ impl Fixture {
                 r.get(0)
             })
             .unwrap();
-        self.app
+        let result = self
+            .app
             .mutate(request(Mutation::DocumentAction {
                 id: Int(doc),
                 revision: Int(revision),
@@ -280,17 +287,21 @@ impl Fixture {
                 reason: String::new(),
                 acknowledge_credit: false,
             }))
-            .unwrap()
+            .unwrap();
+        inventory::assert_balances(&self.db());
+        result
     }
     fn opening(&self) {
         let doc = self.save(self.draft(DocumentKind::OpeningStock, 10_000_000, 1000, 0));
         self.post(doc);
     }
     fn quantity_value(&self) -> (i64, i64) {
+        inventory::assert_balances(&self.db());
         self.db().query_row("SELECT quantity_micros,value_minor FROM v_stock_on_hand WHERE product_id=?1 AND warehouse_id=1",[self.product],|r|Ok((r.get(0)?,r.get(1)?))).unwrap()
     }
     fn reconcile(&self) {
         let db = self.db();
+        inventory::assert_balances(&db);
         let balance: i64 = db
             .query_row(
                 "SELECT COALESCE(SUM(debit_minor-credit_minor),0) FROM v_journal",

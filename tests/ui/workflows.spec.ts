@@ -205,6 +205,11 @@ test('stocktake saves actual count and posts the difference', async ({ page, bac
     limit: 50,
   });
   expect(stock[0].quantity_micros).toBe('98000000');
+  await page.getByRole('button', { name: 'فحص أرصدة المخزون', exact: true }).click();
+  const integrity = page.getByRole('dialog', { name: 'فحص أرصدة المخزون' });
+  await expect(integrity.getByRole('status')).toContainText('الأرصدة والكميات وآخر حركة مطابقة');
+  await expect(integrity).toContainText('الحركات المفحوصة: 2');
+  expect(await backend.query({ type: 'stock_integrity' })).toEqual({ pools: '1', movements: '2' });
 });
 
 test('all module screens and Arabic settings render without page errors', async ({

@@ -304,7 +304,13 @@ export function DocumentDetail({
             )}
           {status === 'posted' &&
             allowed('documents.reverse') &&
-            !['reversal', 'cheque_clear', 'cheque_bounce', 'cash_close'].includes(kind) && (
+            !['reversal', 'cheque_clear', 'cheque_bounce', 'cash_close', 'bank_match'].includes(
+              kind,
+            ) &&
+            (kind !== 'year_end_close' || allowed('finance.close_reverse')) &&
+            (kind !== 'bad_debt' || allowed('finance.writeoff')) &&
+            (kind !== 'customer_credit' || allowed('finance.credit_note')) &&
+            (kind !== 'settlement_discount' || allowed('finance.settlement_discount')) && (
               <Button tone="danger" onClick={() => setReversing(true)}>
                 {t('reverse')}
               </Button>
@@ -325,6 +331,7 @@ export function DocumentDetail({
               'invoice_discount_share_minor',
               'tax_minor',
               'total_minor',
+              ...(detail.lines.some((l) => l.warranty_days) ? ['warranty_days'] : []),
             ]}
           />
         </Panel>
@@ -354,6 +361,14 @@ export function DocumentDetail({
       {detail.expenses.length > 0 && (
         <Panel title="expense">
           <DataTable rows={detail.expenses} columns={['description', 'net_minor', 'tax_minor']} />
+        </Panel>
+      )}
+      {!!detail.finance_context?.length && (
+        <Panel title="financeContext">
+          <DataTable
+            rows={detail.finance_context}
+            columns={Object.keys(detail.finance_context[0])}
+          />
         </Panel>
       )}
       {detail.journal.length > 0 && (

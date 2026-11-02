@@ -282,9 +282,19 @@ impl App {
             );
         }
         let actor = Self::actor(&mut inner)?;
-        let tx = inner.db.transaction()?;
-        let result = services::reporting::query(&tx, &actor, &query)?;
-        tx.commit()?;
-        Ok(result)
+        let result: Result<Value> = (|| {
+            let tx = inner.db.transaction()?;
+            let result = services::reporting::query(&tx, &actor, &query)?;
+            tx.commit()?;
+            Ok(result)
+        })();
+        if let Err(error) = &result {
+            if error.code == "stock_balance_mismatch" {
+                inner.recovery_error = Some(error.message.clone());
+                inner.session = None;
+                inner.import_grants.clear();
+            }
+        }
+        result
     }
 }

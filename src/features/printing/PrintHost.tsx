@@ -58,7 +58,17 @@ function Preview({ source }: { source: PrintSource }) {
         if (
           source.type === 'stock_card' ||
           (source.type === 'report' &&
-            ['aging', 'party_statement', 'cash_shifts'].includes(source.report))
+            [
+              'aging',
+              'party_statement',
+              'cash_shifts',
+              'stock_abc',
+              'stock_activity',
+              'stock_aging',
+              'stock_turnover',
+              'discounts_granted',
+              'collections',
+            ].includes(source.report))
         )
           setLayout('landscape');
       })

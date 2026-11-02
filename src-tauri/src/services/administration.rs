@@ -156,8 +156,14 @@ pub fn master(db: &Connection, m: &Master) -> Result<Value> {
             product_id,
             min_stock,
             bin,
+            shelf,
         } => {
-            db.execute("INSERT INTO warehouse_product_settings(warehouse_id,product_id,min_stock_micros,bin_location) VALUES (?1,?2,?3,?4) ON CONFLICT(warehouse_id,product_id) DO UPDATE SET min_stock_micros=excluded.min_stock_micros,bin_location=excluded.bin_location",params![warehouse_id,product_id,min_stock,bin])?;
+            ensure(
+                bin.chars().count() <= 120
+                    && shelf.as_ref().is_none_or(|s| s.chars().count() <= 120),
+                "موقع الرف أو الخانة طويل",
+            )?;
+            db.execute("INSERT INTO warehouse_product_settings(warehouse_id,product_id,min_stock_micros,bin_location,shelf_location) VALUES (?1,?2,?3,?4,COALESCE(?5,'')) ON CONFLICT(warehouse_id,product_id) DO UPDATE SET min_stock_micros=excluded.min_stock_micros,bin_location=excluded.bin_location,shelf_location=COALESCE(?5,warehouse_product_settings.shelf_location)",params![warehouse_id,product_id,min_stock,bin,shelf])?;
             Ok(json!({"saved":true}))
         }
         Master::Sequence {

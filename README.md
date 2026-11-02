@@ -12,7 +12,7 @@ installed on the Windows PC; an offline runtime installer can be supplied separa
 ## Delivery and verified status
 
 All six source/documentation stages are delivered. **Version 0.1.0 is a release
-candidate, not a production-accepted release.** The actual unsigned NSIS installer built
+candidate, not a production-accepted release.** The original unsigned NSIS installer built
 on Fedora on 28 October 2026 is **3,713,278 bytes (3.71 MB)**:
 
 ```text
@@ -24,6 +24,67 @@ The adjacent `release-manifest.json` and `SHA256SUMS` record the actual payload 
 installer hashes, PE architectures and DLL imports. Both the verifier and LLVM found
 an x64 GUI application without a separate VC++ runtime dependency. `output/` is ignored
 by Git; cloning the source does not download a prebuilt installer.
+
+The subsequent inventory Stage 1 build includes migration 0009 and is kept separately:
+`output/releases/inventory-stage1/0.1.0/fedora-cross/PlumbingStore_0.1.0_x64-setup.exe`
+(**3,717,279 bytes / 3.72 MB**). Its SHA-256 is
+`10dda845302c81c832170051da645c5294c0c549aba32597c215b8e185d85ae9`.
+See [Stage 1 results and exact commands](docs/DEVELOPMENT.md#inventory-improvement-stage-1).
+The subsequent reporting Stage 2 candidate is
+`output/releases/reports-stage2/0.1.0/fedora-cross/PlumbingStore_0.1.0_x64-setup.exe`
+(**3,785,016 bytes / 3.79 MB**), SHA-256
+`fbbe5a417646b15ab099b84d3e4d6dc4a08396a2efe3881c8e9bbcf94fcd3689`.
+Its final checks pass 48 Rust tests, 37 Python tests, 13 frontend tests and 11 browser/core
+tests; see [exact Stage 2 commands and results](docs/DEVELOPMENT.md#reporting-improvement-stage-2).
+It remains unsigned and untested on Windows.
+
+Accounting improvement Stage 3 adds migration 0011: year-end closing/reversal,
+immutable bank/cash statement matching, and allocated customer write-offs, financial
+credit notes and settlement discounts. All use the existing transaction/audit/receipt
+pipeline. Invoice discounts still post net sales; financial credit notes do not move
+stock or automatically alter VAT. See [the accounting contract](docs/ARCHITECTURE.md#accounting-improvement-stage-3-migration-0011)
+and [API payloads](docs/BACKEND_API.md#accounting-improvement-stage-3).
+The installers above predate these source changes.
+Stage 3 checks passed 55 Rust, 37 Python, 13 frontend and 14 browser/core tests,
+plus formatting, generated-file checks, build and Clippy; [exact commands/results](docs/DEVELOPMENT.md#accounting-improvement-stage-3-verification).
+
+Purchasing/pricing Stage 4 adds migration 0012: immutable supplier-price history,
+reorder suggestions grouped into draft supplier orders, actual-cost margin checks,
+audited bulk prices, and landed-cost allocation by value, quantity or weight.
+Preview hashes reject stale calculations; posting still uses the existing atomic
+stock/account pipeline. See [the purchasing contract](docs/ARCHITECTURE.md#purchasing-and-pricing-stage-4-migration-0012)
+and [the Arabic walkthrough](README_AR.md#تحسينات-المشتريات-والتسعير).
+Final Stage 4 checks pass **65 Rust, 38 Python, 13 frontend and 17 browser/core tests**,
+plus formatting, generated-file checks, build and both Clippy configurations. See
+[exact commands and results](docs/DEVELOPMENT.md#purchasing-and-pricing-stage-4-verification).
+The combined Stage 3–4 unsigned Windows NSIS candidate is **3,898,254 bytes (3.90 MB)**:
+
+```text
+output/releases/accounting-purchasing-stages3-4/0.1.0/fedora-cross/PlumbingStore_0.1.0_x64-setup.exe
+SHA256 7345c6c296b50d211e1a931bf2ad274f2c51e49eb6d428167624742cd41ce30b
+```
+
+The adjacent manifest records the x64 application and installer hashes/imports. The
+verifier passed the 20 MB size gate and found no separate C/C++ runtime dependency.
+All earlier installers remain intact. This build has not been installed/run on Windows.
+
+The latest plumbing Stage 5 candidate includes migration 0013, size/material variants,
+component-based sales bundles, shelf/bin locations, quarantine/release and frozen
+invoice warranties. All checks pass: **73 Rust, 39 Python, 14 frontend and 20 browser/core
+tests**, formatting, generated files, production build and both Clippy configurations.
+See [exact commands/results](docs/DEVELOPMENT.md#plumbing-inventory-stage-5-verification).
+The unsigned Fedora-built Windows NSIS installer is **3,933,560 bytes (3.93 MB)**:
+
+```text
+output/releases/plumbing-stage5/0.1.0/fedora-cross/PlumbingStore_0.1.0_x64-setup.exe
+SHA256 1e3f2e7fa4d051c63ab70ede1810cada7df0305b5a4579ecc319cb6f27c4884d
+```
+
+Its manifest confirms the x64 payload, bundled Cairo and the size gate. Previous
+candidates remain separate. Windows installation, native printing and runtime
+performance remain unverified; the local tests do not replace Windows acceptance.
+
+The following table is the original candidate's verification record.
 
 | Check | Recorded result |
 | --- | --- |
@@ -44,9 +105,11 @@ The supplied workflows must be pushed/dispatched to execute on GitHub. See
 ## Implemented workflows
 
 - Catalogue: Arabic product search, categories, images, units with rational conversions,
-  per-unit prices/barcodes, CSV/Excel import/export and barcode sheets.
+  per-unit prices/barcodes, CSV/Excel import/export, barcode sheets, size/material variants,
+  component-based sales bundles and optional warranty terms.
 - Inventory: immutable movement ledger, weighted-average valuation, warehouses,
-  transfers, adjustments, stocktake, low-stock rules and stock cards.
+  transfers, adjustments, stocktake, low-stock rules, shelf/bin locations, stock cards
+  and permission-checked quarantine/release transfers.
 - Sales: keyboard POS, retail/wholesale pricing, discounts/VAT, split/partial payment,
   customer credit, drafts/hold/resume, quotations, linked returns and audited reversal.
 - Purchasing: approved orders, partial/no-PO receiving, damaged/short quantities,
@@ -103,7 +166,7 @@ disposable store. Development also writes real local data through Rust.
 | `src-tauri/src/commands/` | Permission-checked Tauri IPC, native files/printing, opt-in startup diagnostics |
 | `src-tauri/src/services/` | Transactional domain operations, reporting, authentication, imports, backups |
 | `src-tauri/src/models/`, `src-tauri/src/state.rs`, `src-tauri/src/db/` | Strict DTOs/arithmetic, serialized session/transaction boundary, SQLite/migrations |
-| `src-tauri/migrations/` | Eight versioned SQL migrations; authoritative production DDL |
+| `src-tauri/migrations/` | Thirteen versioned SQL migrations; authoritative production DDL |
 | `src-tauri/queries/`, `src-tauri/seeds/` | Historical aging SQL and optional Arabic demo catalogue |
 | `src-tauri/windows/`, `.cargo/config.toml` | Arabic NSIS hooks/strings and target-specific static CRT linkage |
 | `tests/`, `src-tauri/tests/` | Frontend, integration, schema, release and backend tests |
@@ -134,6 +197,20 @@ Persisted ledgers and posted documents are immutable. Corrections use returns,
 reversal or current-date adjustment documents. Supplier invoices match receipt lines;
 only goods receipts add their quantity. Never update stock or party balances directly.
 Financial dates must belong to open periods; stock backdating is also constrained.
+
+Inventory improvement Stage 1 adds a trigger-maintained `stock_balances` cache in
+migration 0009. Costing and movement guards use indexed pool lookups; startup,
+backup/restore and authorized inventory maintenance independently reconcile the cache
+against the ledger. A mismatch blocks work and requires recovery, with no automatic
+repair. This change preserves the existing posting/audit/idempotency transaction.
+The [Stage 1 verification record](docs/DEVELOPMENT.md#inventory-improvement-stage-1)
+documents the 200,000-movement benchmark. Stage 2 adds nine read-only reports with print/export and source-document drill-down,
+retaining net-sales postings and deferring warehouse-specific accounting reconciliation
+as approved by the user. See [definitions and decisions](docs/REPORTS_STAGE2.md).
+Stages 3–5 were authorized and implemented sequentially. Plumbing Stage 5 adds template
+variants, component-based sales bundles, shelf/bin locations, quarantine transfers and
+frozen invoice warranties; see [the contract](docs/ARCHITECTURE.md#plumbing-inventory-stage-5-migration-0013)
+and [implementation/verification notes](docs/STAGE5.md).
 
 Mutations use a UUID idempotency key. Retry an uncertain transport result with the same
 key and payload, not a new document. Draft/product/settings revisions reject stale

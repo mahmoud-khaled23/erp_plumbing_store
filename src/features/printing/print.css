@@ -377,3 +377,8 @@
     border-color: transparent;
   }
 }
+.print-discrepancy td {
+  color: #991b1b;
+  font-weight: 700;
+  border-block: 2px solid #991b1b;
+}

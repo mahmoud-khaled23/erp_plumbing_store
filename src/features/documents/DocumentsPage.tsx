@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { api, s, type DocumentDetail as Detail } from '../../api/client';
 import type { DocumentKind } from '../../api/contracts';
 import { t } from '../../i18n';
@@ -19,6 +19,7 @@ import { DataTable, Pager } from '../../components/Table';
 import { DocumentEditor } from './DocumentEditor';
 import { DocumentDetail, documentPermission } from './DocumentDetail';
 import { LandedCost } from '../purchasing/LandedCost';
+const ReorderPage = lazy(() => import('../purchasing/ReorderPage'));
 export function DocumentsPage({ module }: { module: 'sales' | 'purchasing' | 'receiving' }) {
   const types =
     module === 'sales'
@@ -26,6 +27,7 @@ export function DocumentsPage({ module }: { module: 'sales' | 'purchasing' | 're
       : module === 'purchasing'
         ? ['purchase_order', 'purchase', 'purchase_return', 'landed_cost']
         : ['goods_receipt'];
+  const [suggestions, setSuggestions] = useState(false);
   const [kind, setKind] = useState(types[0]),
     [status, setStatus] = useState(''),
     [cursors, setCursors] = useState(['0']),
@@ -33,7 +35,7 @@ export function DocumentsPage({ module }: { module: 'sales' | 'purchasing' | 're
     [edit, setEdit] = useState<Detail | 'new' | null>(null),
     [landed, setLanded] = useState(false);
   const list = useQuery(
-    selected || edit
+    selected || edit || suggestions
       ? null
       : { type: 'documents', kind, status: status || null, after_id: cursors.at(-1)!, limit: 50 },
   );
@@ -41,6 +43,7 @@ export function DocumentsPage({ module }: { module: 'sales' | 'purchasing' | 're
   const task = useTask();
   const open = (id: string) => {
     setSelected(id);
+    setSuggestions(false);
     setEdit(null);
   };
   return (
@@ -65,6 +68,7 @@ export function DocumentsPage({ module }: { module: 'sales' | 'purchasing' | 're
                 if (useStore.getState().dirty && (await confirmAction(t('unsaved'))) === null)
                   return;
                 setSelected(null);
+                setSuggestions(false);
                 setEdit('new');
               }}
             >
@@ -72,11 +76,25 @@ export function DocumentsPage({ module }: { module: 'sales' | 'purchasing' | 're
               {t('new')}
             </Button>
           )}
+        {module === 'purchasing' && allowed('purchases.plan') && !edit && (
+          <Button
+            onClick={() => {
+              setSuggestions(true);
+              setSelected(null);
+            }}
+          >
+            {t('suggestedPurchases')}
+          </Button>
+        )}
         {module === 'purchasing' && allowed('purchases.write') && (
           <Button onClick={() => setLanded(true)}>{t('landedCost')}</Button>
         )}
       </PageHeader>
-      {edit ? (
+      {suggestions ? (
+        <Suspense fallback={<Loading />}>
+          <ReorderPage onBack={() => setSuggestions(false)} onDocument={open} />
+        </Suspense>
+      ) : edit ? (
         <DocumentEditor
           key={edit === 'new' ? `new-${kind}` : s(edit.header[0], 'id')}
           kind={(edit === 'new' ? kind : s(edit.header[0], 'kind')) as DocumentKind}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -173,7 +173,13 @@ function ProductEditor({ detail, onClose }: { detail?: ProductDetail; onClose: (
         <div className="form-grid">
           {(['code', 'name', 'brand', 'material', 'size'] as const).map((k) => (
             <Field key={k} label={k} error={form.formState.errors[k]?.message}>
-              <Input autoFocus={k === 'code'} {...form.register(k)} />
+              <Input
+                autoFocus={k === 'code'}
+                readOnly={
+                  !!detail?.product[0]?.template_product_id && (k === 'size' || k === 'material')
+                }
+                {...form.register(k)}
+              />
             </Field>
           ))}
           <Field label="category" error={form.formState.errors.category_id?.message}>
@@ -285,7 +291,15 @@ function ProductEditor({ detail, onClose }: { detail?: ProductDetail; onClose: (
     </Modal>
   );
 }
+const ProductPlanningDialog = lazy(() => import('../purchasing/ProductPlanningDialog'));
+const BulkPricesDialog = lazy(() => import('./BulkPricesDialog'));
+const PlumbingProductDialog = lazy(() => import('./PlumbingProductDialog'));
+const BundlesDialog = lazy(() => import('./BundlesDialog'));
 export default function ProductsPage() {
+  const [planning, setPlanning] = useState<string>();
+  const [pricing, setPricing] = useState(false);
+  const [plumbing, setPlumbing] = useState<string>(),
+    [bundles, setBundles] = useState(false);
   const [tab, setTab] = useState<'products' | 'categories' | 'units'>('products');
   const [search, setSearch] = useState('');
   const q = useDebounced(search);
@@ -298,6 +312,12 @@ export default function ProductsPage() {
   return (
     <>
       <PageHeader title="products" hint="productHint">
+        {allowed('products.bundles') && (
+          <Button onClick={() => setBundles(true)}>{t('salesBundles')}</Button>
+        )}
+        {allowed('products.price_update') && (
+          <Button onClick={() => setPricing(true)}>{t('bulkPrices')}</Button>
+        )}
         {allowed('products.import') && (
           <Button onClick={() => setImporting(true)}>{t('import')}</Button>
         )}
@@ -361,6 +381,10 @@ export default function ProductsPage() {
               }
               actions={(r) => (
                 <>
+                  <Button onClick={() => setPlumbing(s(r, 'id'))}>{t('plumbingProduct')}</Button>
+                  {(allowed('purchases.plan') || allowed('purchases.read')) && (
+                    <Button onClick={() => setPlanning(s(r, 'id'))}>{t('productPlanning')}</Button>
+                  )}
                   {allowed('products.write') && (
                     <Button
                       onClick={() =>
@@ -386,6 +410,16 @@ export default function ProductsPage() {
       ) : (
         <MasterManager kind={tab === 'categories' ? 'category' : 'unit'} />
       )}{' '}
+      <Suspense fallback={<Loading />}>
+        {plumbing && (
+          <PlumbingProductDialog product={plumbing} onClose={() => setPlumbing(undefined)} />
+        )}
+        {bundles && <BundlesDialog onClose={() => setBundles(false)} />}
+        {planning && (
+          <ProductPlanningDialog product={planning} onClose={() => setPlanning(undefined)} />
+        )}
+        {pricing && <BulkPricesDialog onClose={() => setPricing(false)} />}
+      </Suspense>
       {editor && (
         <ProductEditor
           detail={editor === 'new' ? undefined : editor}

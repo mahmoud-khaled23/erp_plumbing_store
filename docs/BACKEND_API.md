@@ -181,6 +181,24 @@ Dates must belong to an open fiscal period. The template date examples are illus
 
 ## Reporting and errors
 
+Inventory maintenance accepts `{"query":{"type":"stock_integrity"}}` via `erp_query`.
+It requires `inventory.verify` (admin, storekeeper or accountant), checks **all**
+product/warehouse pools, and returns `{"pools":"12","movements":"200000"}` with
+decimal-string counts. It is read-only, uses one consistent read transaction, and does
+not append audit/idempotency records or repair data. The inventory screen exposes this
+as **فحص أرصدة المخزون**, with progress and a persistent result/error dialog.
+
+Migration 0009 backfills `stock_balances` from the immutable ledger; insertion triggers
+maintain quantity, value and last movement for every stock path, within the existing
+posting transaction. No new stock-writing command is exposed. Costing pool lookups and
+availability/date guards use the cache. Historical reports remain ledger-based.
+
+Startup and backup/restore checks also verify the cache. Any missing/extra pool,
+quantity/value difference, missing cache table or wrong last movement fails with
+`stock_balance_mismatch` and an Arabic message. A maintenance mismatch clears the session
+and import grants and sets `recovery_required:true` in bootstrap; login/writes remain
+blocked until recovery. Failed validation never rebuilds balances automatically.
+
 Queries provide keyset pagination for catalogue/documents/stock and bounded report
 pagination. Stock without a selected warehouse is aggregated per product, so its cursor
 cannot skip a warehouse row. A statement includes an opening balance and running balances;
@@ -192,7 +210,203 @@ are Arabic; raw SQLite queries, internal paths and credentials are not returned.
 result is retryable. Validation, revision conflicts, credit warnings and insufficient
 stock require user correction or the explicit authorized acknowledgement.
 
-## Print snapshots
+### Stage 2 report queries, drill-down and exports
+
+`Query::Report` adds `balance_sheet`, `inventory_reconciliation`, `stock_abc`,
+`stock_activity`, `stock_aging`, `stock_turnover`, `discounts_granted`, `vat_return`,
+and `collections`. These nine return `{rows, opening: [], summary}`; `summary` is an
+array of `{metric, amount_minor}` with whole-report totals. Old array reports and
+party-statement opening rows retain their contracts. All row values are decimal strings,
+text or null; an undefined turnover or unknown VAT base/rate is null, never zero.
+
+Each new row contains `drill_key`. Send the unchanged report filter and this opaque key:
+
+```json
+{"query":{"type":"report_drilldown","filter":{"report":"balance_sheet","from":"2026-01-01","to":"2026-10-27","party_id":null},"key":"account:120","limit":100,"offset":0}}
+```
+
+The result is `{rows, columns}`; rows carry `document_id` for the existing `document`
+query. The detail view shows movements, journal entries or unpaid items, then the source
+document and its journal. Keys are validated per report and SQL parameters are bound.
+Require `reports.read` and `reports.drilldown`, plus `finance.read` for financial/ABC
+entries or `inventory.read` for stock movements; document reads retain their existing
+kind-specific authorization. Limits clamp to 1–200; UI uses pages of 100.
+
+`ReportFilter` contains `{report, from, to, party_id}`. Dates must be valid ISO dates
+with `from <= to`. Balance sheet, reconciliation, activity, aging and collections are
+as-of `to`; other new reports use inclusive date ranges. Only collections and discounts
+accept `party_id` among the new reports; unsupported filters fail in Arabic. The user
+approved net-sales postings unchanged and deferred warehouse accounting reconciliation;
+`inventory_reconciliation` is **whole-store only**. See [report definitions](REPORTS_STAGE2.md)
+for ABC thresholds, residence-age assumptions, VAT residuals and last-receipt meaning.
+
+Export with `erp_file` and action
+`{type:"export_report", filter:ReportFilter, excel:boolean}`. This requires `reports.read`
+and `reports.export`; migration 0010 grants the two new actions to admin/accountant.
+A native save dialog selects the destination; IPC accepts no arbitrary output path.
+Cancellation returns `{cancelled:true}`. Success returns `{rows:"count", path:"selected"}`.
+The same backend query runs in one snapshot and exports **all** matching rows and summary,
+including Arabic headers, store, currency, dates and methodological notes. More than
+10,000 rows fails before creating a file; existing files cannot be overwritten. Write
+failure removes only the newly created incomplete destination. Success appends an
+`export_report` audit event with filters without changing any ledger or posted document.
+
+CSV is UTF-8 BOM and guards formula-like cells. XLSX is RTL with frozen headings, filters
+and highlighted discrepancies. Every numeric cell is an exact decimal **string** (currency
+minor digits, quantity six places, ratios three places, percentage two places); files use
+Western digits and dd/MM/yyyy dates. This intentionally avoids Excel precision loss.
+Do not silently coerce exported large values to floating-point numbers on re-import.
+
+## Accounting improvement stage 3
+
+All identifiers and monetary values below are integer strings. New mutations use
+the existing `erp_mutate` request UUID, immediate transaction, audit and receipt.
+
+| Operation | Payload / result | Permission |
+|---|---|---|
+| `closing_preview` query | `period_id,date` → `rows,preview_hash,result_minor` | `finance.close` |
+| `close_year` mutation | `period_id,date,preview_hash,reason` → posted document | `finance.close` |
+| `reverse` on a close | Existing reversal payload, date in next open contiguous period | `documents.reverse` + `finance.close_reverse` |
+| `customer_open_items` query | `search,after_id,limit` → receivable debit rows with residuals | `finance.read` |
+| `receivable_adjustment` mutation | `kind,date,debit_line_id,amount,reason` | `finance.writeoff`, `finance.credit_note` or `finance.settlement_discount` |
+| `bank_statements` query | `after_id,limit` → statement headers/status | `finance.reconcile` |
+| `parse_statement_csv` query | `csv` → `{date,amount,reference,description}[]` | `finance.reconcile` |
+| `save_bank_statement` mutation | `statement:{cash_account_id,starts_on,ends_on,reference,opening,closing,lines}` | `finance.reconcile` |
+| `reconciliation` query | `statement_id,view,limit,offset` → `rows,summary` | `finance.reconcile` |
+| `match_statement` mutation | `statement_line_id,journal_line_id,amount,date,reason` | `finance.reconcile` |
+| `unmatch_statement` mutation | `match_id,date,reason` | `finance.reconcile` |
+| `void_bank_statement` mutation | `statement_id,date,reason` | `finance.reconcile` |
+
+Adjustment kinds: `bad_debt`, `customer_credit`, `settlement_discount`; reversal also
+requires the kind-specific permission. No stock or VAT effects. Reconciliation views:
+`statement`, `journal`, `matches`. Match amounts are positive; unmatch derives the
+exact negative amount internally. A statement with active matches cannot be voided.
+`bank_match` cannot be passed to the generic reversal command. CSV header is exactly
+`date,amount,reference,description`, ISO dates and signed decimal currency amounts.
+All new actions are granted to admin/accountant except close reversal (admin only).
+The `document` result optionally adds `finance_context` rows, also available in
+authorized print snapshots. Closing preview is stale if relevant balances/periods
+change, and must be recomputed before posting.
+
+## Purchasing and pricing stage 4
+
+All new mutations use the normal UUID request, authorization, immediate transaction,
+audit and idempotency receipt. IDs, micros, monetary values, revisions, grams and signed
+`rate_bps` are integer strings. Bounded day counts and `minimum_margin_bps` are JSON
+integers. Queries that paginate clamp `limit` to 1–200; the UI uses 50.
+
+| Operation | Payload / result | Permission |
+|---|---|---|
+| `product_planning` query | `product_id` → planning row and nullable latest base-unit purchase cost | `products.read` |
+| `save_product_planning` mutation | `planning:{product_id,revision,supplier_id,reorder_point,max_level,lead_time_days,weight_grams},reason` | `purchases.plan` |
+| `supplier_prices` query | `product_id,after_id,limit` → frozen purchase rows, derived costs/status | `purchases.read` |
+| `reorder_suggestions` query | `filter,after_id,limit` → current stock/orders, net sales, trigger, target, suggestion and supplier cost | `purchases.plan` |
+| `suggested_orders_preview` query | `filter,product_ids` → `rows,preview_hash` | `purchases.plan` |
+| `create_suggested_orders` mutation | `filter,product_ids,preview_hash,reason` → `{document_ids}` | `purchases.plan` + `purchases.write` |
+| `pricing_policy` query | no fields → singleton row | `products.read` |
+| `save_pricing_policy` mutation | `revision,minimum_margin_bps,reason` | `pricing.manage` |
+| `price_units` query | `search,after_id,limit` → active unit prices | `products.price_update` |
+| `price_preview` query | `unit_ids,rule` → `rows,preview_hash` | `products.price_update` |
+| `apply_prices` mutation | `unit_ids,rule,preview_hash,reason` → `{id,count}` (batch ID) | `products.price_update` |
+| `sale_margins` query | `warehouse_id,lines,discount` → per-line cost, net, profit, margin and override requirement | `sales.write` |
+| `landed_preview` query | `basis,amount,receipt_line_ids` → `rows,preview_hash` | `purchases.write` |
+| `allocate_landed_cost` mutation | `date,supplier_id,description,basis,amount,receipt_line_ids,preview_hash` → posted document | `purchases.write` |
+
+`filter` is `{warehouse_id,through,lookback_days,coverage_days}`. Through is ISO date;
+lookback and coverage are 1–365 days. Stock/open orders/prices are current, while the
+sales window ends at through. `product_ids` has 1–200 unique IDs. Draft POs use base
+units, one per supplier, no payments or VAT until reviewed through the normal editor.
+`supplier_prices.after_id` is the last purchase-line ID (descending); other new cursors
+are ascending product or unit IDs. Pass `"0"` to start. History's last cost excludes
+reversed purchases and VAT/landed costs; null means no invoice. Suggestions expose
+`suggested_unit_cost_minor` separately for standard-cost fallback.
+
+`rule` is `{basis:"percentage"|"cost_markup",price_list:"retail"|"wholesale"|"both",rate_bps}`.
+At most 500 unique units; percentage range is −10000 to 1000000 bps; markup cannot be
+negative. All prices are bounded minor units with half-up integer rounding. Price/order/
+landed hashes are recomputed during mutation; stale data returns an Arabic validation
+error without side effects. Planning and policy saves use optimistic revisions.
+
+Margin `lines` use existing `DraftLine` objects; `discount` is the invoice discount.
+The response is advisory and simulates sequential issues. Actual sale posting rechecks
+actual issue cost and the current policy and requires `sales.discount` plus document/
+posting reason for below-cost or below-minimum sales. Margin is pre-VAT and after all
+discounts. The reason supplied to `post` is saved on the draft within the transaction
+before posting. Existing quotation, hold/resume and return pipelines are preserved.
+
+Automatic landed basis is `value`, `quantity` or `weight`; at most 1000 unique positive
+posted/unreversed receipt lines. Weight requires positive configured grams per base
+unit. Manual allocation keeps the existing `landed_cost` mutation with explicit shares.
+Both paths reuse `revalue`; `document.finance_context` and print snapshots expose the
+actual allocation method and amount. New planning/pricing permissions are granted to
+admin/accountant by migration, never by frontend state.
+
+## Plumbing inventory stage 5
+
+All examples below are `erp_query` payloads or `Mutation` payloads inside the existing
+UUID request envelope. IDs, revisions, prices and quantities are decimal strings;
+`days` is a bounded integer or null. All mutations retain one transaction, audit entry
+and idempotency receipt. No new filesystem/network command or posting engine is added.
+
+| Query | Fields | Response / permission |
+| --- | --- | --- |
+| `variant_preview` | `template_id`, `variants:[{code,size,material,barcode}]` | `{rows,preview_hash}`; `products.variants` |
+| `product_variants` | `template_id,after_id,limit` | Direct child rows, cursor `product_id`; `products.read` |
+| `bundles` | `search,after_id,limit` | Headers including inactive, cursor `id`; `products.read` |
+| `bundle` | `id` | `{header,items}`; items include `unit_id,product_id,quantity_micros`, names/conversions; `products.read` |
+| `expand_bundle` | `id,quantity,wholesale` | `{rows,total_minor}`; `sales.write` |
+
+Variant previews accept 1–100 combinations. Template active units/prices, warranty and
+planning are hashed; a stale preview is rejected. Base-unit barcodes are optional;
+alternate barcodes are cleared. Created products have independent prices and stock.
+`product_variants` is an immutable origin link; size/material cannot subsequently change.
+All cursor queries clamp `limit` to 1–200; the UI requests 50.
+
+| Mutation | Fields | Permission and result |
+| --- | --- | --- |
+| `create_variants` | `template_id,variants,preview_hash,reason` | `products.variants` + `products.write`; `{product_ids,count}` |
+| `save_bundle` | `bundle:{id,revision,code,name,active,items:[{unit_id,quantity}]},reason` | `products.bundles`; `{id}` |
+| `set_warranty` | `product_id,revision,days,reason` | `products.warranty`; `{id}`; reread product for new revision |
+| `set_quarantine_warehouse` | `warehouse_id,revision,quarantine,reason` | `inventory.quarantine_manage`; `{id}` |
+| `quarantine_transfer` | `date,from_id,to_id,lines:[{unit_id,quantity}],reason` | `inventory.quarantine` + `inventory.transfer`; normal posted transfer result |
+
+`save_bundle` uses null ID/revision `"0"` for creation and current revision for edits.
+It accepts 1–100 distinct real product units, each with positive quantity in millionths
+of that selected unit. Bundles cannot contain bundles. `expand_bundle.quantity` is
+millionths of a kit; output component quantities are selected-unit micros, not base
+micros. Expansion uses current active component prices and exact rational conversion,
+returning `unit_price_minor`, `subtotal_minor`, `bundle_name` and product/unit IDs.
+`total_minor` is the sum before taxes/discounts. Expansion is read-only. The caller adds
+ordinary `DraftLine` values and a bundle-name note, then uses normal save/post. The
+user can edit individual lines; no parent kit quantity or fixed kit price is persisted.
+Linked returns select the original component lines, even after the recipe changes.
+
+`set_warranty.days` accepts null or 1–36500 and increments the product revision. Product
+queries include `warranty_days` and nullable `template_product_id`. New sale/quotation
+lines snapshot warranty; linked returns and quotation conversion preserve source terms.
+Draft edits regenerate terms from current products; posted lines never change. Historical
+lines from before migration 0013 remain null. Document/print line rows include
+`warranty_days`, rendered on A4 and thermal receipts without extra print permissions.
+
+Bootstrap warehouse rows include `is_quarantine` and `quarantine_revision`; use that
+revision for classification changes and reload bootstrap after success. Existing
+`save_master.warehouse` cannot change classification. Removing quarantine requires
+zero quantity and value in all warehouse pools. The focused transfer requires exactly
+one normal and one quarantine warehouse, then saves/posts a normal transfer in the
+same transaction. Generic transfers involving quarantine also require permission and
+reason. Direct sale/margin preview is rejected for a quarantine warehouse. Other
+outgoing movements and reversal enforce quarantine permission in addition to their
+existing permissions. Every posted quarantine transfer freezes `from_quarantine` and
+`to_quarantine`, exposed in document/print headers even if classification later changes.
+
+`save_master.warehouse_product` adds optional `shelf` alongside `bin` (both at most 120
+characters). Null/omitted shelf preserves an existing value; empty clears it. Inventory
+rows add `shelf_location,bin_location,available_quantity_micros,quarantine_quantity_micros`.
+Locations are null for all-warehouse queries. Total quantity/value includes quarantine;
+available quantity includes only active normal warehouses, with no draft reservations.
+Rejected/damaged goods-receipt quantities are still excluded from owned stock.
+
+## Print snapshot contract
 
 `erp_query` accepts `{"type":"print_snapshot","source":{"type":"document","id":"42"}}`.
 Other sources are `{"type":"labels","unit_ids":["1","2"]}`,
@@ -202,7 +416,8 @@ A report without a party uses `party_id:null`; party statements require a party.
 
 The response contains `document` (nullable), `rows`, `opening`, `context`, `references`,
 `store`, `preferences` and `generated_at`. All financial values remain integer strings.
-Documents preserve historical store and line snapshots; reports/labels use current
+New report print snapshots include `summary` with the same whole-report totals as the
+screen/export and emphasize discrepancies. Documents preserve historical store and line snapshots; reports/labels use current
 settings. Snapshots load all selected report rows up to 10,000, reject overflow and
 require the same source permission as the on-screen query. Labels accept 1–100 unique
 active product units with barcodes. Read operations never mutate ledgers.

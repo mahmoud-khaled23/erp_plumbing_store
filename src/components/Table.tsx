@@ -19,11 +19,20 @@ const enums = new Set([
   'method',
   'from_status',
   'to_status',
+  'stock_class',
+  'stock_activity',
+  'vat_side',
+  'allocation_basis',
 ]);
 export function CellValue({ field, value }: { field: string; value: string | null | undefined }) {
   const b = useStore((s) => s.bootstrap);
   const ar = arabicDigits();
-  if (value == null || value === '') return <span className="text-slate-400">—</span>;
+  if (value == null || value === '')
+    return (
+      <span className="text-slate-400">
+        {field === 'tax_rate_bps' ? t('unclassifiedVat') : '—'}
+      </span>
+    );
   if (field === 'status' || field === 'progress') return <Status value={value} />;
   if (enums.has(field)) return <>{enumLabel(value)}</>;
   const lookup: Record<string, string> = {
@@ -51,6 +60,7 @@ export function CellValue({ field, value }: { field: string; value: string | nul
     if (field.endsWith('_micros') || field === 'min_stock')
       return <bdi className="number">{formatDecimal(value, 6, ar, true)}</bdi>;
     if (field.endsWith('_bps')) return <bdi>{formatDecimal(value, 2, ar, true)}%</bdi>;
+    if (field.endsWith('_milli')) return <bdi>{formatDecimal(value, 3, ar, true)}</bdi>;
     if (field === 'unit_cost_micropiastres') return <bdi>{formatDecimal(value, 8, ar, true)}</bdi>;
     return <bdi>{localDigits(value, ar)}</bdi>;
   }

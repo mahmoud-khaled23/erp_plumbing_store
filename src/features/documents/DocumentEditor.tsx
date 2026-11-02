@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, s, type DocumentDetail, type Row } from '../../api/client';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  api,
+  ApiError,
+  s,
+  type DocumentDetail,
+  type ProductDetail,
+  type Row,
+} from '../../api/client';
 import type { DocumentKind, Draft, DraftLine } from '../../api/contracts';
 import { t } from '../../i18n';
 import {
@@ -23,7 +30,7 @@ import {
   parseDate,
   rounded,
 } from '../../lib/numbers';
-import { useDirty, useHotkeys, useQuery, useTask } from '../../lib/hooks';
+import { useDebounced, useDirty, useHotkeys, useQuery, useTask } from '../../lib/hooks';
 import {
   Button,
   Check,
@@ -39,6 +46,7 @@ import { MasterSelect, PartyPicker, ProductSearch } from '../../components/Picke
 import { Payments, paymentPayload, type PaymentEdit } from '../../components/Payments';
 import { SourcePicker } from './SourcePicker';
 import { invoiceTotals } from './calculation';
+const BundlePicker = lazy(() => import('./BundlePicker'));
 
 interface LineEdit {
   key: string;
@@ -97,6 +105,7 @@ export function DocumentEditor({
   const [loadError, setLoadError] = useState<unknown>();
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [searching, setSearching] = useState(false);
+  const [bundlePicking, setBundlePicking] = useState(false);
   const desk = useQuery(allowed('cash.shift') ? { type: 'cash_desk' } : null);
   useDirty(dirty);
   useEffect(() => {
@@ -213,6 +222,23 @@ export function DocumentEditor({
   } catch (e) {
     calcError = e instanceof Error ? e.message : t('invalid');
   }
+  const marginQuery = useMemo(() => {
+    if (!sales || !lines.length || !warehouse) return null;
+    try {
+      const payload = lines.map(linePayload),
+        disc = decimal(discount, digits);
+      invoiceTotals(payload, disc);
+      return {
+        type: 'sale_margins' as const,
+        warehouse_id: warehouse,
+        lines: payload,
+        discount: disc,
+      };
+    } catch {
+      return null;
+    }
+  }, [lines, warehouse, discount, kind, digits]);
+  const margins = useQuery(useDebounced(marginQuery));
   const total = calculation?.total ?? 0n;
   let paid = 0n;
   try {
@@ -479,6 +505,11 @@ export function DocumentEditor({
       </Panel>
       <Panel>
         <div className="mb-4 flex items-start gap-3">
+          {sales && (
+            <Button disabled={searching || task.busy} onClick={() => setBundlePicking(true)}>
+              {t('addBundle')}
+            </Button>
+          )}
           {kind !== 'purchase' && (
             <div className="flex-1">
               <ProductSearch autoFocus onSelect={(r) => addProduct(r)} onPending={setSearching} />
@@ -506,6 +537,7 @@ export function DocumentEditor({
                     ...(!stock ? ['lineDiscount', 'vatPercent'] : []),
                     ...(kind === 'goods_receipt' ? ['damaged', 'short'] : []),
                     'total',
+                    ...(sales ? ['estimatedMargin'] : []),
                     'actions',
                   ].map((k) => (
                     <th key={k}>{t(k)}</th>
@@ -653,6 +685,30 @@ export function DocumentEditor({
                         {calculation ? money(calculation.totals[i]) : '—'}
                       </bdi>
                     </td>
+                    {sales && (
+                      <td
+                        className={
+                          margins.data?.[i]?.override_required === '1'
+                            ? 'text-red-700'
+                            : 'text-teal-800'
+                        }
+                      >
+                        {margins.data?.[i] ? (
+                          <>
+                            <bdi>{money(s(margins.data[i], 'margin_minor'))}</bdi>
+                            <span className="block text-xs">
+                              <bdi>
+                                {margins.data[i].margin_bps !== null
+                                  ? `${formatDecimal(s(margins.data[i], 'margin_bps'), 2, arabicDigits(), true)}%`
+                                  : '—'}
+                              </bdi>
+                            </span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    )}
                     <td>
                       <Button
                         tone="ghost"
@@ -686,6 +742,11 @@ export function DocumentEditor({
               <Input value={reason} onChange={(e) => mark(setReason)(e.target.value)} />
             </Field>
           </div>
+          {sales && <p className="mt-3 text-sm text-slate-500">{t('marginEstimateHint')}</p>}
+          {sales && margins.error ? <ErrorState error={margins.error} /> : null}
+          {sales && margins.data?.some((r) => r.override_required === '1') && (
+            <p className="mt-3 text-sm text-red-700">{t('marginOverrideHint')}</p>
+          )}
           {payable && (
             <div className="mt-5">
               <Payments
@@ -793,6 +854,46 @@ export function DocumentEditor({
           }}
         />
       )}
+      <Suspense fallback={<Loading />}>
+        {bundlePicking && (
+          <BundlePicker
+            wholesale={wholesale}
+            onClose={() => setBundlePicking(false)}
+            onAdd={async (rows) => {
+              if (linesRef.current.length + rows.length > 1000)
+                throw new Error(t('bundleLineLimit'));
+              const products = new Map<string, ProductDetail>();
+              for (const id of new Set(rows.map((r) => s(r, 'product_id'))))
+                products.set(id, await api.query({ type: 'product', id }));
+              const added: LineEdit[] = rows.map((r) => {
+                const p = products.get(s(r, 'product_id'))!;
+                return {
+                  key: crypto.randomUUID(),
+                  product: p.product[0],
+                  units: p.units,
+                  unit: s(r, 'unit_id'),
+                  quantity: editDecimal(s(r, 'quantity_micros'), 6),
+                  price: editDecimal(s(r, 'unit_price_minor'), digits),
+                  discount: '0',
+                  tax:
+                    s(settings, 'vat_enabled') === '1'
+                      ? editDecimal(s(settings, 'default_vat_rate_bps', '0'), 2)
+                      : '0',
+                  orderLine: null,
+                  damaged: '0',
+                  short: '0',
+                  matches: [],
+                  notes: `${t('bundleComponent')}: ${s(r, 'bundle_name')}`,
+                };
+              });
+              const next = [...linesRef.current, ...added];
+              linesRef.current = next;
+              setLines(next);
+              setDirty(true);
+            }}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

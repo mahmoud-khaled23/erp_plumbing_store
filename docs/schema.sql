@@ -1526,5 +1526,465 @@ END;
 INSERT INTO schema_migrations(version, name, sha256) VALUES (8, '0008_cost_attribution.sql', '2b45d9bdbc8759d6af11e2628df9a50052abd5a2f0ba5d38345e3eb40feb2381');
 COMMIT;
 
+-- Migration: 0009_stock_balances.sql
+BEGIN IMMEDIATE;
+-- Derived cache only: the immutable movement ledger remains authoritative.
+-- Keep zero pools: their last movement is needed for backdating and stocktakes.
+CREATE TABLE stock_balances (
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+    quantity_micros INTEGER NOT NULL,
+    value_minor INTEGER NOT NULL,
+    last_movement_id INTEGER NOT NULL REFERENCES stock_movements(id),
+    PRIMARY KEY (product_id, warehouse_id)
+) STRICT;
+CREATE INDEX idx_stock_balances_warehouse ON stock_balances(warehouse_id, product_id);
+CREATE INDEX idx_stock_balances_movement ON stock_balances(last_movement_id);
+
+INSERT INTO stock_balances(product_id, warehouse_id, quantity_micros, value_minor, last_movement_id)
+SELECT product_id, warehouse_id, SUM(quantity_micros), SUM(value_minor), MAX(id)
+FROM stock_movements GROUP BY product_id, warehouse_id;
+
+-- Every insertion path, including INSERT ... SELECT reversals and preview savepoints,
+-- goes through this trigger. RAISE(ABORT) rolls back the entire inserting statement.
+CREATE TRIGGER stock_balances_append AFTER INSERT ON stock_movements BEGIN
+    SELECT RAISE(ABORT, 'تسلسل حركات المخزون غير صالح') WHERE NEW.id <= COALESCE((
+        SELECT last_movement_id FROM stock_balances
+        WHERE product_id = NEW.product_id AND warehouse_id = NEW.warehouse_id), 0);
+    -- Check using subtraction BEFORE adding; SQLite must never promote overflow to REAL.
+    SELECT RAISE(ABORT, 'رصيد المخزون يتجاوز الحدود الرقمية المسموحة') WHERE EXISTS (
+        SELECT 1 FROM stock_balances WHERE product_id = NEW.product_id AND warehouse_id = NEW.warehouse_id AND (
+        (NEW.quantity_micros > 0 AND quantity_micros > 9223372036854775807 - NEW.quantity_micros)
+        OR (NEW.quantity_micros < 0 AND quantity_micros < -9223372036854775808 - NEW.quantity_micros)
+        OR (NEW.value_minor > 0 AND value_minor > 9223372036854775807 - NEW.value_minor)
+        OR (NEW.value_minor < 0 AND value_minor < -9223372036854775808 - NEW.value_minor)));
+    INSERT INTO stock_balances(product_id, warehouse_id, quantity_micros, value_minor, last_movement_id)
+    VALUES (NEW.product_id, NEW.warehouse_id, NEW.quantity_micros, NEW.value_minor, NEW.id)
+    ON CONFLICT(product_id, warehouse_id) DO UPDATE SET
+        quantity_micros = stock_balances.quantity_micros + excluded.quantity_micros,
+        value_minor = stock_balances.value_minor + excluded.value_minor,
+        last_movement_id = excluded.last_movement_id;
+END;
+
+-- Retain all existing checks, replacing only history-wide availability/date reads.
+-- Posting dates are nondecreasing per pool; append order is enforced above.
+DROP TRIGGER stock_movements_insert_guard;
+CREATE TRIGGER stock_movements_insert_guard BEFORE INSERT ON stock_movements BEGIN
+    SELECT RAISE(ABORT, 'حركة المخزون تنشأ داخل عملية الترحيل فقط') WHERE
+        COALESCE((SELECT status FROM documents WHERE id = NEW.document_id), '') <> 'posting';
+    SELECT RAISE(ABORT, 'الصنف أو المخزن غير نشط') WHERE NOT EXISTS (SELECT 1 FROM products WHERE id = NEW.product_id AND active = 1)
+        OR NOT EXISTS (SELECT 1 FROM warehouses WHERE id = NEW.warehouse_id AND active = 1);
+    SELECT RAISE(ABORT, 'نوع حركة المخزون لا يطابق المستند') WHERE NOT EXISTS (
+        SELECT 1 FROM documents d WHERE d.id = NEW.document_id AND (
+        (d.kind = 'sale' AND NEW.movement_type = 'sale')
+        OR (d.kind = 'sale_return' AND NEW.movement_type = 'sale_return')
+        OR (d.kind = 'purchase_return' AND NEW.movement_type = 'purchase_return')
+        OR (d.kind = 'goods_receipt' AND NEW.movement_type = 'receipt')
+        OR (d.kind = 'transfer' AND NEW.movement_type IN ('transfer_in', 'transfer_out'))
+        OR (d.kind IN ('adjustment', 'stocktake') AND NEW.movement_type = 'adjustment')
+        OR (d.kind = 'opening_stock' AND NEW.movement_type = 'opening')
+        OR (d.kind IN ('landed_cost', 'purchase', 'cost_adjustment') AND NEW.movement_type = 'revaluation')
+        OR (d.kind = 'reversal' AND NEW.movement_type = 'reversal')));
+    SELECT RAISE(ABORT, 'سطر الصنف مطلوب للحركة') WHERE NEW.document_line_id IS NULL
+        AND NEW.movement_type IN ('sale', 'sale_return', 'purchase_return', 'receipt', 'transfer_in', 'transfer_out', 'opening');
+    SELECT RAISE(ABORT, 'مخزن الحركة لا يطابق المستند') WHERE NEW.movement_type NOT IN ('revaluation', 'reversal') AND NOT EXISTS (
+        SELECT 1 FROM documents d WHERE d.id = NEW.document_id AND NEW.warehouse_id =
+        CASE WHEN NEW.movement_type = 'transfer_in' THEN d.destination_warehouse_id ELSE d.warehouse_id END);
+    SELECT RAISE(ABORT, 'الرصيد غير كاف؛ المخزون السالب غير مسموح') WHERE NEW.quantity_micros < 0
+        AND (SELECT allow_negative_stock FROM store_settings WHERE id = 1) = 0
+        AND COALESCE((SELECT quantity_micros FROM stock_balances
+            WHERE product_id = NEW.product_id AND warehouse_id = NEW.warehouse_id), 0) < -NEW.quantity_micros;
+    SELECT RAISE(ABORT, 'لا يمكن ترحيل حركة مخزون بتاريخ أقدم من آخر حركة للصنف') WHERE EXISTS (
+        SELECT 1 FROM stock_balances b JOIN stock_movements s ON s.id = b.last_movement_id
+        JOIN documents d ON d.id = s.document_id
+        WHERE b.product_id = NEW.product_id AND b.warehouse_id = NEW.warehouse_id
+        AND d.document_date > (SELECT document_date FROM documents WHERE id = NEW.document_id));
+    SELECT RAISE(ABORT, 'عكس حركة المخزون لا يطابق الأصل') WHERE NEW.movement_type = 'reversal' AND NOT EXISTS (
+        SELECT 1 FROM stock_movements s JOIN documents d ON d.id = NEW.document_id
+        WHERE s.id = NEW.reverses_movement_id AND s.document_id = d.reversal_of_id
+        AND s.product_id = NEW.product_id AND s.warehouse_id = NEW.warehouse_id
+        AND s.quantity_micros = -NEW.quantity_micros AND s.value_minor = -NEW.value_minor
+        AND s.unit_cost_micropiastres = NEW.unit_cost_micropiastres);
+END;
+
+INSERT INTO permissions(code, name_ar) VALUES ('inventory.verify', 'فحص مطابقة أرصدة المخزون');
+INSERT INTO role_permissions(role_id, permission_code)
+SELECT id, 'inventory.verify' FROM roles WHERE code IN ('admin', 'storekeeper', 'accountant');
+
+INSERT INTO schema_migrations(version, name, sha256) VALUES (9, '0009_stock_balances.sql', '02296f1b5eee38e3211a34d4c853b693e265650967aef18183cef3138ce5f43c');
+COMMIT;
+
+-- Migration: 0010_report_access.sql
+BEGIN IMMEDIATE;
+-- Read-only reporting actions; no change to posting rules or existing ledger rows.
+INSERT INTO permissions(code,name_ar) VALUES
+('reports.export','تصدير التقارير'), ('reports.drilldown','عرض تفاصيل التقارير');
+INSERT INTO role_permissions(role_id,permission_code)
+SELECT r.id,p.code FROM roles r CROSS JOIN permissions p
+WHERE r.code IN ('admin','accountant') AND p.code IN ('reports.export','reports.drilldown');
+
+INSERT INTO schema_migrations(version, name, sha256) VALUES (10, '0010_report_access.sql', 'd3fc90d1b838296d95edeafa57d49a3a9f64fcd0f435b5fd2e0a5fdc73f479b2');
+COMMIT;
+
+-- Migration: 0011_period_close_reconciliation.sql
+BEGIN IMMEDIATE;
+-- New documents and immutable reconciliation/closing evidence; no historical edits.
+INSERT INTO document_types(code,name_ar,requires_journal,requires_lines,can_post) VALUES
+('year_end_close','إقفال السنة المالية',1,0,1),
+('bad_debt','إعدام دين عميل',1,0,1),
+('customer_credit','إشعار دائن مالي للعميل',1,0,1),
+('settlement_discount','خصم تسوية عميل',1,0,1),
+('bank_match','مطابقة كشف حساب',0,0,1);
+INSERT INTO permissions(code,name_ar) VALUES
+('finance.close','ترحيل إقفال السنة'),('finance.close_reverse','عكس إقفال السنة'),
+('finance.reconcile','مطابقة الخزينة والبنك'),('finance.writeoff','إعدام ديون العملاء'),
+('finance.credit_note','إشعارات العملاء الدائنة'),('finance.settlement_discount','خصومات تسوية العملاء');
+INSERT INTO role_permissions SELECT 1,code FROM permissions WHERE code IN
+('finance.close','finance.close_reverse','finance.reconcile','finance.writeoff','finance.credit_note','finance.settlement_discount');
+INSERT INTO role_permissions SELECT 4,code FROM permissions WHERE code IN
+('finance.close','finance.reconcile','finance.writeoff','finance.credit_note','finance.settlement_discount');
+INSERT INTO accounts(code,name_ar,parent_id,kind,is_postable)
+VALUES ('SYS-BAD-DEBT','ديون معدومة',5,'expense',1);
+INSERT INTO posting_accounts(key,account_id) VALUES ('retained_earnings',302);
+INSERT INTO posting_accounts SELECT 'bad_debt',id FROM accounts WHERE code='SYS-BAD-DEBT';
+
+CREATE TABLE year_closings (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id),
+    period_id INTEGER NOT NULL REFERENCES fiscal_periods(id),
+    result_minor INTEGER NOT NULL,
+    preview_hash TEXT NOT NULL CHECK(length(preview_hash)=64)
+) STRICT;
+CREATE INDEX idx_year_closings_period ON year_closings(period_id);
+CREATE TRIGGER year_closings_insert BEFORE INSERT ON year_closings BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents WHERE id=NEW.document_id AND kind='year_end_close' AND status='draft' AND length(trim(reason))>0)
+        THEN RAISE(ABORT,'مستند الإقفال غير صالح') END;
+    SELECT CASE WHEN EXISTS(SELECT 1 FROM year_closings c JOIN documents d ON d.id=c.document_id WHERE c.period_id=NEW.period_id AND d.status='posted' AND NOT EXISTS(SELECT 1 FROM documents r WHERE r.reversal_of_id=d.id AND r.status='posted'))
+        THEN RAISE(ABORT,'الفترة مقفلة بالفعل') END;
+END;
+CREATE TRIGGER year_closings_no_update BEFORE UPDATE ON year_closings BEGIN SELECT RAISE(ABORT,'سجل الإقفال ثابت'); END;
+CREATE TRIGGER year_closings_no_delete BEFORE DELETE ON year_closings BEGIN SELECT RAISE(ABORT,'سجل الإقفال ثابت'); END;
+CREATE TRIGGER fiscal_closed_unlock BEFORE UPDATE OF locked_at ON fiscal_periods
+WHEN NEW.locked_at IS NULL AND EXISTS(SELECT 1 FROM year_closings c JOIN documents d ON d.id=c.document_id WHERE c.period_id=OLD.id AND d.status='posted' AND NOT EXISTS(SELECT 1 FROM documents r WHERE r.reversal_of_id=d.id AND r.status='posted'))
+BEGIN SELECT RAISE(ABORT,'اعكس مستند إقفال السنة قبل فتح الفترة'); END;
+
+CREATE TABLE receivable_adjustments (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id),
+    source_debit_line_id INTEGER NOT NULL REFERENCES journal_lines(id),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor BETWEEN 1 AND 1000000000000000)
+) STRICT;
+CREATE INDEX idx_receivable_adjustments_source ON receivable_adjustments(source_debit_line_id);
+CREATE TRIGGER receivable_adjustments_insert BEFORE INSERT ON receivable_adjustments BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents d JOIN journal_lines j ON j.id=NEW.source_debit_line_id JOIN accounts a ON a.id=j.account_id WHERE d.id=NEW.document_id AND d.status='draft' AND d.kind IN ('bad_debt','customer_credit','settlement_discount') AND length(trim(d.reason))>0 AND j.party_id=d.party_id AND j.debit_minor>=NEW.amount_minor AND a.control_kind='receivable')
+        THEN RAISE(ABORT,'تسوية العميل غير صالحة') END;
+END;
+CREATE TRIGGER receivable_adjustments_no_update BEFORE UPDATE ON receivable_adjustments BEGIN SELECT RAISE(ABORT,'تسوية العميل ثابتة'); END;
+CREATE TRIGGER receivable_adjustments_no_delete BEFORE DELETE ON receivable_adjustments BEGIN SELECT RAISE(ABORT,'تسوية العميل ثابتة'); END;
+
+CREATE TABLE bank_statements (
+    id INTEGER PRIMARY KEY,
+    cash_account_id INTEGER NOT NULL REFERENCES cash_accounts(id),
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    starts_on TEXT NOT NULL CHECK(date(starts_on,'+0 days') IS starts_on AND length(starts_on)=10),
+    ends_on TEXT NOT NULL CHECK(date(ends_on,'+0 days') IS ends_on AND length(ends_on)=10 AND ends_on>=starts_on),
+    reference TEXT NOT NULL CHECK(length(trim(reference)) BETWEEN 1 AND 200),
+    opening_minor INTEGER NOT NULL CHECK(opening_minor BETWEEN -2000000000000000 AND 2000000000000000),
+    closing_minor INTEGER NOT NULL CHECK(closing_minor BETWEEN -2000000000000000 AND 2000000000000000),
+    source_hash TEXT NOT NULL CHECK(length(source_hash)=64),
+    line_count INTEGER NOT NULL CHECK(line_count BETWEEN 1 AND 5000),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(cash_account_id,reference),
+    UNIQUE(cash_account_id,source_hash)
+) STRICT;
+CREATE INDEX idx_bank_statements_account ON bank_statements(account_id,ends_on);
+CREATE INDEX idx_bank_statements_user ON bank_statements(created_by);
+CREATE TABLE bank_statement_lines (
+    id INTEGER PRIMARY KEY,
+    statement_id INTEGER NOT NULL REFERENCES bank_statements(id),
+    line_number INTEGER NOT NULL CHECK(line_number BETWEEN 1 AND 5000),
+    value_date TEXT NOT NULL CHECK(date(value_date,'+0 days') IS value_date AND length(value_date)=10),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor BETWEEN -1000000000000000 AND 1000000000000000 AND amount_minor<>0),
+    reference TEXT NOT NULL,
+    description TEXT NOT NULL,
+    UNIQUE(statement_id,line_number)
+) STRICT;
+CREATE INDEX idx_bank_statement_lines_date ON bank_statement_lines(value_date);
+CREATE TABLE bank_statement_voids (
+    statement_id INTEGER PRIMARY KEY REFERENCES bank_statements(id),
+    document_id INTEGER NOT NULL UNIQUE REFERENCES documents(id)
+) STRICT;
+CREATE TABLE reconciliation_matches (
+    id INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL UNIQUE REFERENCES documents(id),
+    statement_line_id INTEGER NOT NULL REFERENCES bank_statement_lines(id),
+    journal_line_id INTEGER NOT NULL REFERENCES journal_lines(id),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor BETWEEN -1000000000000000 AND 1000000000000000 AND amount_minor<>0),
+    reversal_of_id INTEGER UNIQUE REFERENCES reconciliation_matches(id),
+    CHECK((amount_minor<0)=(reversal_of_id IS NOT NULL))
+) STRICT;
+CREATE INDEX idx_reconciliation_matches_statement ON reconciliation_matches(statement_line_id);
+CREATE INDEX idx_reconciliation_matches_journal ON reconciliation_matches(journal_line_id);
+CREATE TRIGGER bank_statements_insert BEFORE INSERT ON bank_statements BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM cash_accounts WHERE id=NEW.cash_account_id AND account_id=NEW.account_id AND active=1) THEN RAISE(ABORT,'حساب الكشف غير صالح') END;
+END;
+CREATE TRIGGER bank_statements_no_update BEFORE UPDATE ON bank_statements BEGIN SELECT RAISE(ABORT,'الكشف ثابت؛ ألغ الكشف وأدخل كشفاً جديداً'); END;
+CREATE TRIGGER bank_statements_no_delete BEFORE DELETE ON bank_statements BEGIN SELECT RAISE(ABORT,'الكشف ثابت'); END;
+CREATE TRIGGER bank_statement_lines_insert BEFORE INSERT ON bank_statement_lines BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM bank_statements WHERE id=NEW.statement_id AND NEW.value_date BETWEEN starts_on AND ends_on AND NEW.line_number<=line_count) THEN RAISE(ABORT,'تاريخ أو رقم سطر الكشف غير صالح') END;
+    SELECT CASE WHEN EXISTS(SELECT 1 FROM reconciliation_matches m JOIN bank_statement_lines l ON l.id=m.statement_line_id WHERE l.statement_id=NEW.statement_id) OR EXISTS(SELECT 1 FROM bank_statement_voids WHERE statement_id=NEW.statement_id) THEN RAISE(ABORT,'لا يمكن إضافة سطور إلى كشف مستخدم') END;
+END;
+CREATE TRIGGER bank_statement_lines_no_update BEFORE UPDATE ON bank_statement_lines BEGIN SELECT RAISE(ABORT,'سطر الكشف ثابت'); END;
+CREATE TRIGGER bank_statement_lines_no_delete BEFORE DELETE ON bank_statement_lines BEGIN SELECT RAISE(ABORT,'سطر الكشف ثابت'); END;
+CREATE TRIGGER bank_statement_voids_insert BEFORE INSERT ON bank_statement_voids BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents WHERE id=NEW.document_id AND kind='bank_match' AND status='posting' AND length(trim(reason))>0) THEN RAISE(ABORT,'مستند إلغاء الكشف غير صالح') END;
+    SELECT CASE WHEN EXISTS(SELECT 1 FROM reconciliation_matches m JOIN bank_statement_lines l ON l.id=m.statement_line_id WHERE l.statement_id=NEW.statement_id AND m.amount_minor>0 AND NOT EXISTS(SELECT 1 FROM reconciliation_matches r WHERE r.reversal_of_id=m.id)) THEN RAISE(ABORT,'ألغ المطابقات أولاً') END;
+END;
+CREATE TRIGGER bank_statement_voids_no_update BEFORE UPDATE ON bank_statement_voids BEGIN SELECT RAISE(ABORT,'إلغاء الكشف ثابت'); END;
+CREATE TRIGGER bank_statement_voids_no_delete BEFORE DELETE ON bank_statement_voids BEGIN SELECT RAISE(ABORT,'إلغاء الكشف ثابت'); END;
+CREATE TRIGGER reconciliation_matches_insert BEFORE INSERT ON reconciliation_matches BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents d JOIN bank_statement_lines l ON l.id=NEW.statement_line_id JOIN bank_statements s ON s.id=l.statement_id JOIN journal_lines j ON j.id=NEW.journal_line_id JOIN documents src ON src.id=j.document_id WHERE d.id=NEW.document_id AND d.kind='bank_match' AND d.status='posting' AND length(trim(d.reason))>0 AND j.account_id=s.account_id AND src.status='posted' AND (j.debit_minor-j.credit_minor)*(CASE WHEN l.amount_minor>0 THEN 1 ELSE -1 END)>0 AND d.document_date>=l.value_date AND d.document_date>=src.document_date AND NOT EXISTS(SELECT 1 FROM bank_statement_voids v WHERE v.statement_id=s.id)) THEN RAISE(ABORT,'المطابقة لا تطابق الحساب أو الاتجاه أو التاريخ') END;
+    SELECT CASE WHEN NEW.amount_minor>0 AND (
+        NEW.amount_minor>abs((SELECT amount_minor FROM bank_statement_lines WHERE id=NEW.statement_line_id))-COALESCE((SELECT SUM(amount_minor) FROM reconciliation_matches WHERE statement_line_id=NEW.statement_line_id),0)
+        OR NEW.amount_minor>(SELECT debit_minor+credit_minor FROM journal_lines WHERE id=NEW.journal_line_id)-COALESCE((SELECT SUM(amount_minor) FROM reconciliation_matches WHERE journal_line_id=NEW.journal_line_id),0)
+        OR EXISTS(SELECT 1 FROM journal_lines j JOIN documents r ON r.reversal_of_id=j.document_id WHERE j.id=NEW.journal_line_id AND r.status='posted')) THEN RAISE(ABORT,'المبلغ مطابق مسبقاً أو المستند معكوس') END;
+    SELECT CASE WHEN NEW.amount_minor<0 AND NOT EXISTS(SELECT 1 FROM reconciliation_matches m JOIN documents d ON d.id=m.document_id JOIN documents n ON n.id=NEW.document_id WHERE m.id=NEW.reversal_of_id AND m.amount_minor=-NEW.amount_minor AND m.statement_line_id=NEW.statement_line_id AND m.journal_line_id=NEW.journal_line_id AND n.document_date>=d.document_date) THEN RAISE(ABORT,'عكس المطابقة غير صالح') END;
+END;
+CREATE TRIGGER reconciliation_matches_no_update BEFORE UPDATE ON reconciliation_matches BEGIN SELECT RAISE(ABORT,'المطابقة ثابتة؛ استخدم إلغاء المطابقة'); END;
+CREATE TRIGGER reconciliation_matches_no_delete BEFORE DELETE ON reconciliation_matches BEGIN SELECT RAISE(ABORT,'المطابقة ثابتة؛ استخدم إلغاء المطابقة'); END;
+CREATE TRIGGER bank_cash_account_guard BEFORE UPDATE OF account_id ON cash_accounts
+WHEN NEW.account_id<>OLD.account_id AND EXISTS(SELECT 1 FROM bank_statements WHERE cash_account_id=OLD.id)
+BEGIN SELECT RAISE(ABORT,'لا يمكن تغيير حساب دفتر لكشف مستخدم'); END;
+CREATE TRIGGER reconciliation_reverse_guard BEFORE UPDATE OF status ON documents
+WHEN NEW.status='posting' AND NEW.kind='reversal' AND EXISTS(SELECT 1 FROM reconciliation_matches m JOIN journal_lines j ON j.id=m.journal_line_id WHERE j.document_id=NEW.reversal_of_id AND m.amount_minor>0 AND NOT EXISTS(SELECT 1 FROM reconciliation_matches r WHERE r.reversal_of_id=m.id))
+BEGIN SELECT RAISE(ABORT,'ألغ المطابقة البنكية قبل عكس المستند'); END;
+CREATE TRIGGER finance_documents_metadata BEFORE UPDATE OF status ON documents WHEN NEW.status='posting' BEGIN
+    SELECT CASE WHEN NEW.kind='year_end_close' AND NOT EXISTS(SELECT 1 FROM year_closings WHERE document_id=NEW.id) THEN RAISE(ABORT,'بيانات الإقفال مفقودة') END;
+    SELECT CASE WHEN NEW.kind IN ('bad_debt','customer_credit','settlement_discount') AND NOT EXISTS(SELECT 1 FROM receivable_adjustments WHERE document_id=NEW.id) THEN RAISE(ABORT,'بيانات تسوية العميل مفقودة') END;
+END;
+CREATE TRIGGER closing_reverse_period_guard BEFORE UPDATE OF status ON documents
+WHEN NEW.status='posting' AND NEW.kind='reversal' AND EXISTS(SELECT 1 FROM year_closings WHERE document_id=NEW.reversal_of_id) BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM year_closings c JOIN fiscal_periods p ON p.id=c.period_id JOIN fiscal_periods n ON n.starts_on=date(p.ends_on,'+1 day') WHERE c.document_id=NEW.reversal_of_id AND NEW.document_date BETWEEN n.starts_on AND n.ends_on AND n.locked_at IS NULL) THEN RAISE(ABORT,'عكس الإقفال داخل الفترة التالية المفتوحة فقط') END;
+END;
+
+INSERT INTO schema_migrations(version, name, sha256) VALUES (11, '0011_period_close_reconciliation.sql', '06fa300fac566979220dd10899e906c693e06eb033a14902aed4bb9c553f6b71');
+COMMIT;
+
+-- Migration: 0012_purchasing_pricing.sql
+BEGIN IMMEDIATE;
+INSERT INTO permissions(code,name_ar) VALUES
+('purchases.plan','تخطيط إعادة الطلب'),('products.price_update','تحديث الأسعار الجماعي'),
+('pricing.manage','إدارة الحد الأدنى للهامش');
+INSERT INTO role_permissions SELECT 1,code FROM permissions WHERE code IN ('purchases.plan','products.price_update','pricing.manage');
+INSERT INTO role_permissions SELECT 4,code FROM permissions WHERE code IN ('purchases.plan','products.price_update','pricing.manage');
+
+CREATE TABLE product_planning (
+    product_id INTEGER PRIMARY KEY REFERENCES products(id),
+    supplier_id INTEGER REFERENCES parties(id),
+    reorder_point_micros INTEGER NOT NULL DEFAULT 0 CHECK(reorder_point_micros BETWEEN 0 AND 1000000000000000),
+    max_level_micros INTEGER NOT NULL DEFAULT 0 CHECK(max_level_micros BETWEEN reorder_point_micros AND 1000000000000000),
+    lead_time_days INTEGER NOT NULL DEFAULT 0 CHECK(lead_time_days BETWEEN 0 AND 3650),
+    weight_grams INTEGER NOT NULL DEFAULT 0 CHECK(weight_grams BETWEEN 0 AND 1000000),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>0)
+) STRICT;
+CREATE INDEX idx_product_planning_supplier ON product_planning(supplier_id);
+CREATE TABLE pricing_policy (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    minimum_margin_bps INTEGER NOT NULL DEFAULT 0 CHECK(minimum_margin_bps BETWEEN 0 AND 10000),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
+) STRICT;
+INSERT INTO pricing_policy(id) VALUES(1);
+
+CREATE TABLE supplier_price_history (
+    purchase_line_id INTEGER PRIMARY KEY REFERENCES document_lines(id),
+    document_id INTEGER NOT NULL REFERENCES documents(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    product_unit_id INTEGER NOT NULL REFERENCES product_units(id),
+    supplier_id INTEGER NOT NULL REFERENCES parties(id),
+    document_date TEXT NOT NULL,
+    base_quantity_micros INTEGER NOT NULL CHECK(base_quantity_micros>0),
+    quantity_micros INTEGER NOT NULL CHECK(quantity_micros>0),
+    net_minor INTEGER NOT NULL CHECK(net_minor BETWEEN 0 AND 1000000000000),
+    unit_name_snapshot TEXT NOT NULL
+) STRICT;
+CREATE INDEX idx_supplier_prices_product ON supplier_price_history(product_id,document_date DESC,purchase_line_id DESC);
+CREATE INDEX idx_supplier_prices_supplier ON supplier_price_history(supplier_id,product_id,document_date DESC);
+CREATE INDEX idx_supplier_prices_document ON supplier_price_history(document_id);
+CREATE INDEX idx_supplier_prices_unit ON supplier_price_history(product_unit_id);
+CREATE INDEX idx_supplier_prices_date ON supplier_price_history(document_date);
+-- Preserve raw net value and quantity: no SQL multiplication or rounded historical cost.
+INSERT INTO supplier_price_history
+SELECT l.id,d.id,l.product_id,l.product_unit_id,d.party_id,d.document_date,l.base_quantity_micros,l.quantity_micros,
+       l.subtotal_minor-l.line_discount_minor-l.invoice_discount_share_minor,l.unit_name_snapshot
+FROM document_lines l JOIN documents d ON d.id=l.document_id WHERE d.kind='purchase' AND d.status='posted';
+CREATE TRIGGER supplier_prices_post AFTER UPDATE OF status ON documents
+WHEN NEW.kind='purchase' AND NEW.status='posted' AND OLD.status='posting' BEGIN
+    INSERT INTO supplier_price_history
+    SELECT l.id,NEW.id,l.product_id,l.product_unit_id,NEW.party_id,NEW.document_date,l.base_quantity_micros,l.quantity_micros,
+           l.subtotal_minor-l.line_discount_minor-l.invoice_discount_share_minor,l.unit_name_snapshot
+    FROM document_lines l WHERE l.document_id=NEW.id;
+END;
+CREATE TRIGGER supplier_prices_insert BEFORE INSERT ON supplier_price_history BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents d JOIN document_lines l ON l.document_id=d.id WHERE d.id=NEW.document_id AND d.kind='purchase' AND d.status='posted' AND l.id=NEW.purchase_line_id AND l.product_id=NEW.product_id AND l.product_unit_id=NEW.product_unit_id AND d.party_id=NEW.supplier_id AND d.document_date=NEW.document_date AND l.base_quantity_micros=NEW.base_quantity_micros AND l.quantity_micros=NEW.quantity_micros AND l.unit_name_snapshot=NEW.unit_name_snapshot AND l.subtotal_minor-l.line_discount_minor-l.invoice_discount_share_minor=NEW.net_minor) THEN RAISE(ABORT,'سجل سعر المورد لا يطابق فاتورة مرحلة') END;
+END;
+CREATE TRIGGER supplier_prices_no_update BEFORE UPDATE ON supplier_price_history BEGIN SELECT RAISE(ABORT,'سجل أسعار الموردين ثابت'); END;
+CREATE TRIGGER supplier_prices_no_delete BEFORE DELETE ON supplier_price_history BEGIN SELECT RAISE(ABORT,'سجل أسعار الموردين ثابت'); END;
+
+CREATE TABLE price_update_batches (
+    id INTEGER PRIMARY KEY,
+    rule_json TEXT NOT NULL CHECK(json_valid(rule_json)),
+    preview_hash TEXT NOT NULL CHECK(length(preview_hash)=64),
+    reason TEXT NOT NULL CHECK(length(trim(reason))>0),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+CREATE INDEX idx_price_update_batches_user ON price_update_batches(created_by);
+CREATE INDEX idx_price_update_batches_date ON price_update_batches(created_at);
+CREATE TABLE price_update_lines (
+    batch_id INTEGER NOT NULL REFERENCES price_update_batches(id),
+    product_unit_id INTEGER NOT NULL REFERENCES product_units(id),
+    old_retail_minor INTEGER NOT NULL CHECK(old_retail_minor BETWEEN 0 AND 1000000000000),
+    new_retail_minor INTEGER NOT NULL CHECK(new_retail_minor BETWEEN 0 AND 1000000000000),
+    old_wholesale_minor INTEGER NOT NULL CHECK(old_wholesale_minor BETWEEN 0 AND 1000000000000),
+    new_wholesale_minor INTEGER NOT NULL CHECK(new_wholesale_minor BETWEEN 0 AND 1000000000000),
+    PRIMARY KEY(batch_id,product_unit_id)
+) STRICT;
+CREATE INDEX idx_price_update_lines_unit ON price_update_lines(product_unit_id);
+CREATE TRIGGER price_batches_no_update BEFORE UPDATE ON price_update_batches BEGIN SELECT RAISE(ABORT,'دفعة تحديث الأسعار ثابتة'); END;
+CREATE TRIGGER price_batches_no_delete BEFORE DELETE ON price_update_batches BEGIN SELECT RAISE(ABORT,'دفعة تحديث الأسعار ثابتة'); END;
+CREATE TRIGGER price_lines_no_update BEFORE UPDATE ON price_update_lines BEGIN SELECT RAISE(ABORT,'سجل تحديث السعر ثابت'); END;
+CREATE TRIGGER price_lines_no_delete BEFORE DELETE ON price_update_lines BEGIN SELECT RAISE(ABORT,'سجل تحديث السعر ثابت'); END;
+
+CREATE TABLE sale_margin_checks (
+    document_line_id INTEGER PRIMARY KEY REFERENCES document_lines(id),
+    document_id INTEGER NOT NULL REFERENCES documents(id),
+    net_minor INTEGER NOT NULL CHECK(net_minor BETWEEN 0 AND 1000000000000),
+    cost_minor INTEGER NOT NULL CHECK(cost_minor BETWEEN 0 AND 2000000000000000),
+    minimum_margin_bps INTEGER NOT NULL CHECK(minimum_margin_bps BETWEEN 0 AND 10000),
+    override_user_id INTEGER REFERENCES users(id),
+    reason TEXT NOT NULL,
+    CHECK(override_user_id IS NULL OR length(trim(reason))>0)
+) STRICT;
+CREATE INDEX idx_sale_margin_checks_document ON sale_margin_checks(document_id);
+CREATE INDEX idx_sale_margin_checks_user ON sale_margin_checks(override_user_id);
+CREATE TRIGGER sale_margin_checks_insert BEFORE INSERT ON sale_margin_checks BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents d JOIN document_lines l ON l.document_id=d.id WHERE d.id=NEW.document_id AND d.kind='sale' AND d.status='posting' AND l.id=NEW.document_line_id AND l.subtotal_minor-l.line_discount_minor-l.invoice_discount_share_minor=NEW.net_minor) THEN RAISE(ABORT,'بيانات فحص الهامش غير صالحة') END;
+END;
+CREATE TRIGGER sale_margin_checks_no_update BEFORE UPDATE ON sale_margin_checks BEGIN SELECT RAISE(ABORT,'فحص هامش البيع ثابت'); END;
+CREATE TRIGGER sale_margin_checks_no_delete BEFORE DELETE ON sale_margin_checks BEGIN SELECT RAISE(ABORT,'فحص هامش البيع ثابت'); END;
+
+-- The old charge field remains the legacy explicit-share input. Actual new
+-- calculation method and weights are frozen here, including weight allocation.
+CREATE TABLE landed_calculations (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id),
+    basis TEXT NOT NULL CHECK(basis IN ('value','quantity','weight')),
+    amount_minor INTEGER NOT NULL CHECK(amount_minor BETWEEN 1 AND 1000000000000000),
+    inputs_json TEXT NOT NULL CHECK(json_valid(inputs_json)),
+    preview_hash TEXT NOT NULL CHECK(length(preview_hash)=64)
+) STRICT;
+CREATE TRIGGER landed_calculations_insert BEFORE INSERT ON landed_calculations BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM documents WHERE id=NEW.document_id AND kind='landed_cost' AND status='posted' AND total_minor=NEW.amount_minor) THEN RAISE(ABORT,'بيانات توزيع التكلفة لا تطابق المستند') END;
+END;
+CREATE TRIGGER landed_calculations_no_update BEFORE UPDATE ON landed_calculations BEGIN SELECT RAISE(ABORT,'طريقة توزيع التكلفة ثابتة'); END;
+CREATE TRIGGER landed_calculations_no_delete BEFORE DELETE ON landed_calculations BEGIN SELECT RAISE(ABORT,'طريقة توزيع التكلفة ثابتة'); END;
+
+INSERT INTO schema_migrations(version, name, sha256) VALUES (12, '0012_purchasing_pricing.sql', 'd4da1cda2b00361f067e7ba75b270d97bc8c95d81211ff77d846bbf3a5a40fef');
+COMMIT;
+
+-- Migration: 0013_plumbing_inventory.sql
+BEGIN IMMEDIATE;
+INSERT INTO permissions(code,name_ar) VALUES
+('products.variants','إنشاء مقاسات وخامات من قالب'),
+('products.bundles','إدارة أطقم البيع'),('products.warranty','إدارة ضمان الأصناف'),
+('inventory.quarantine','عزل البضاعة والإفراج عنها'),
+('inventory.quarantine_manage','تحديد مخازن العزل');
+INSERT INTO role_permissions SELECT 1,code FROM permissions WHERE code IN ('products.variants','products.bundles','products.warranty','inventory.quarantine','inventory.quarantine_manage');
+INSERT INTO role_permissions SELECT 3,code FROM permissions WHERE code IN ('products.variants','products.bundles','products.warranty','inventory.quarantine');
+
+ALTER TABLE products ADD COLUMN warranty_days INTEGER CHECK(warranty_days BETWEEN 1 AND 36500);
+ALTER TABLE document_lines ADD COLUMN warranty_days INTEGER CHECK(warranty_days BETWEEN 1 AND 36500);
+ALTER TABLE warehouses ADD COLUMN is_quarantine INTEGER NOT NULL DEFAULT 0 CHECK(is_quarantine IN (0,1));
+ALTER TABLE warehouses ADD COLUMN quarantine_revision INTEGER NOT NULL DEFAULT 0 CHECK(quarantine_revision>=0);
+ALTER TABLE warehouse_product_settings ADD COLUMN shelf_location TEXT NOT NULL DEFAULT '' CHECK(length(shelf_location)<=120);
+
+-- No backfill: historical documents never acquire today's warranty terms.
+CREATE TRIGGER document_line_warranty_snapshot AFTER INSERT ON document_lines
+WHEN (SELECT kind FROM documents WHERE id=NEW.document_id) IN ('sale','quotation','sale_return') BEGIN
+    UPDATE document_lines SET warranty_days=CASE
+      WHEN NEW.source_line_id IS NOT NULL THEN (SELECT warranty_days FROM document_lines WHERE id=NEW.source_line_id)
+      ELSE (SELECT warranty_days FROM products WHERE id=NEW.product_id) END
+    WHERE id=NEW.id;
+END;
+
+CREATE TABLE product_variants (
+    product_id INTEGER PRIMARY KEY REFERENCES products(id),
+    template_product_id INTEGER NOT NULL REFERENCES products(id),
+    template_revision INTEGER NOT NULL CHECK(template_revision>=0),
+    size_snapshot TEXT NOT NULL CHECK(length(trim(size_snapshot)) BETWEEN 1 AND 120),
+    material_snapshot TEXT NOT NULL CHECK(length(trim(material_snapshot)) BETWEEN 1 AND 120),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(template_product_id,size_snapshot,material_snapshot),
+    CHECK(product_id<>template_product_id)
+) STRICT;
+CREATE INDEX idx_product_variants_user ON product_variants(created_by);
+CREATE INDEX idx_product_variants_date ON product_variants(created_at);
+CREATE TRIGGER variants_no_update BEFORE UPDATE ON product_variants BEGIN SELECT RAISE(ABORT,'مرجع إنشاء الصنف ثابت'); END;
+CREATE TRIGGER variants_no_delete BEFORE DELETE ON product_variants BEGIN SELECT RAISE(ABORT,'مرجع إنشاء الصنف ثابت'); END;
+CREATE TRIGGER variant_identity_guard BEFORE UPDATE OF size,material ON products
+WHEN (NEW.size<>OLD.size OR NEW.material<>OLD.material) AND EXISTS(SELECT 1 FROM product_variants WHERE product_id=OLD.id) BEGIN
+    SELECT RAISE(ABORT,'مقاس وخامة الصنف المشتق ثابتان؛ أنشئ صنفاً جديداً');
+END;
+
+CREATE TABLE sales_bundles (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL COLLATE NOCASE UNIQUE CHECK(length(trim(code)) BETWEEN 1 AND 64),
+    name_ar TEXT NOT NULL CHECK(length(trim(name_ar)) BETWEEN 1 AND 200),
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN(0,1)),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
+) STRICT;
+CREATE INDEX idx_sales_bundles_name ON sales_bundles(name_ar);
+CREATE TABLE sales_bundle_items (
+    bundle_id INTEGER NOT NULL REFERENCES sales_bundles(id),
+    product_unit_id INTEGER NOT NULL REFERENCES product_units(id),
+    quantity_micros INTEGER NOT NULL CHECK(quantity_micros BETWEEN 1 AND 1000000000000000),
+    PRIMARY KEY(bundle_id,product_unit_id)
+) STRICT;
+CREATE INDEX idx_sales_bundle_items_unit ON sales_bundle_items(product_unit_id);
+-- Bundles reference only real product units; recursive bundles cannot be represented.
+
+CREATE TABLE quarantine_transfers (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id),
+    from_quarantine INTEGER NOT NULL CHECK(from_quarantine IN(0,1)),
+    to_quarantine INTEGER NOT NULL CHECK(to_quarantine IN(0,1)),
+    CHECK(from_quarantine=1 OR to_quarantine=1)
+) STRICT;
+CREATE TRIGGER quarantine_transfer_insert BEFORE INSERT ON quarantine_transfers BEGIN
+    SELECT RAISE(ABORT,'مرجع تحويل العزل غير صالح') WHERE NOT EXISTS(
+      SELECT 1 FROM documents d JOIN warehouses f ON f.id=d.warehouse_id JOIN warehouses t ON t.id=d.destination_warehouse_id
+      WHERE d.id=NEW.document_id AND d.status='draft' AND d.kind='transfer' AND length(trim(d.reason))>0
+      AND f.is_quarantine=NEW.from_quarantine AND t.is_quarantine=NEW.to_quarantine);
+END;
+CREATE TRIGGER quarantine_transfer_no_update BEFORE UPDATE ON quarantine_transfers BEGIN SELECT RAISE(ABORT,'سجل تحويل العزل ثابت'); END;
+CREATE TRIGGER quarantine_transfer_no_delete BEFORE DELETE ON quarantine_transfers BEGIN SELECT RAISE(ABORT,'سجل تحويل العزل ثابت'); END;
+CREATE TRIGGER quarantine_declassify_guard BEFORE UPDATE OF is_quarantine ON warehouses
+WHEN OLD.is_quarantine=1 AND NEW.is_quarantine=0 BEGIN
+    SELECT RAISE(ABORT,'أفرج عن رصيد مخزن العزل بتحويل قبل تغيير تصنيفه') WHERE EXISTS(
+      SELECT 1 FROM stock_balances WHERE warehouse_id=OLD.id AND (quantity_micros<>0 OR value_minor<>0));
+END;
+CREATE TRIGGER quarantine_sale_guard BEFORE UPDATE OF status ON documents
+WHEN NEW.status='posting' AND NEW.kind='sale' BEGIN
+    SELECT RAISE(ABORT,'لا يمكن البيع من مخزن العزل؛ أفرج عن البضاعة أولاً') WHERE EXISTS(
+      SELECT 1 FROM warehouses WHERE id=NEW.warehouse_id AND is_quarantine=1);
+END;
+CREATE TRIGGER quarantine_movement_guard BEFORE INSERT ON stock_movements
+WHEN EXISTS(SELECT 1 FROM warehouses WHERE id=NEW.warehouse_id AND is_quarantine=1) BEGIN
+    SELECT RAISE(ABORT,'لا يمكن البيع من مخزن العزل') WHERE NEW.movement_type='sale';
+    SELECT RAISE(ABORT,'إخراج بضاعة من العزل يتطلب الصلاحية وسبباً') WHERE NEW.quantity_micros<0 AND (
+      length(trim(NEW.reason))=0 OR NOT EXISTS(SELECT 1 FROM user_roles u JOIN role_permissions p ON p.role_id=u.role_id WHERE u.user_id=NEW.created_by AND p.permission_code='inventory.quarantine'));
+END;
+
+INSERT INTO schema_migrations(version, name, sha256) VALUES (13, '0013_plumbing_inventory.sql', '2e63532ad15fe942560bcacc07bf71a7e7eea292b252ef7bf5922f317dd7229f');
+COMMIT;
+
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;

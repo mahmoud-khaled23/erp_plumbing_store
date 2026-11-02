@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 pub const MAX_PRINT_ROWS: usize = 10_000;
 
 pub fn snapshot(db: &Connection, actor: &Actor, source: &PrintSource) -> Result<Value> {
-    let mut result = json!({"source":source,"document":null,"rows":[],"opening":[],"context":[],"references":{},"store":{},"preferences":{}});
+    let mut result = json!({"source":source,"document":null,"rows":[],"opening":[],"summary":[],"context":[],"references":{},"store":{},"preferences":{}});
     match source {
         PrintSource::Document { id } => {
             let doc = reporting::query(db, actor, &Query::Document { id: *id })?;
@@ -51,6 +51,7 @@ pub fn snapshot(db: &Connection, actor: &Actor, source: &PrintSource) -> Result<
                 value
             } else {
                 result["opening"] = value["opening"].clone();
+                result["summary"] = value.get("summary").cloned().unwrap_or_else(|| json!([]));
                 value["rows"].clone()
             };
             if let Some(id) = party_id {

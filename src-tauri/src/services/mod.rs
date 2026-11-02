@@ -1,13 +1,21 @@
 pub mod administration;
 pub mod auth;
 pub mod catalog;
+pub mod closing;
 pub mod costing;
 pub mod documents;
 pub mod files;
 pub mod finance;
 pub mod inventory;
+pub mod plumbing;
+pub mod pricing;
 pub mod printing;
+pub mod purchasing;
+pub mod quarantine;
+pub mod receivable_adjustments;
+pub mod reconciliation;
 pub mod reporting;
+pub mod reports;
 pub mod returns;
 
 use crate::{error::Result, models::*, state::Actor};
@@ -16,6 +24,23 @@ use serde_json::Value;
 
 pub fn permission(m: &Mutation) -> &'static str {
     match m {
+        Mutation::CreateVariants { .. } => "products.variants",
+        Mutation::SaveBundle { .. } => "products.bundles",
+        Mutation::SetWarranty { .. } => "products.warranty",
+        Mutation::SetQuarantineWarehouse { .. } => "inventory.quarantine_manage",
+        Mutation::QuarantineTransfer { .. } => "inventory.quarantine",
+        Mutation::SaveProductPlanning { .. } | Mutation::CreateSuggestedOrders { .. } => {
+            "purchases.plan"
+        }
+        Mutation::SavePricingPolicy { .. } => "pricing.manage",
+        Mutation::ApplyPrices { .. } => "products.price_update",
+        Mutation::AllocateLandedCost { .. } => "purchases.write",
+        Mutation::CloseYear { .. } => "finance.close",
+        Mutation::ReceivableAdjustment { kind, .. } => kind.permission(),
+        Mutation::SaveBankStatement { .. }
+        | Mutation::MatchStatement { .. }
+        | Mutation::UnmatchStatement { .. }
+        | Mutation::VoidBankStatement { .. } => "finance.reconcile",
         Mutation::SaveProduct { .. } => "products.write",
         Mutation::SaveParty { .. } => "parties.write",
         Mutation::SaveMaster { master } => match master {
@@ -54,6 +79,112 @@ pub fn permission(m: &Mutation) -> &'static str {
 pub fn mutate(db: &Connection, actor: &Actor, m: &Mutation) -> Result<Value> {
     actor.require(permission(m))?;
     match m {
+        Mutation::CreateVariants {
+            template_id,
+            variants,
+            preview_hash,
+            reason,
+        } => plumbing::create_variants(db, actor, template_id.0, variants, preview_hash, reason),
+        Mutation::SaveBundle { bundle, reason } => plumbing::save_bundle(db, actor, bundle, reason),
+        Mutation::SetWarranty {
+            product_id,
+            revision,
+            days,
+            reason,
+        } => plumbing::warranty(db, actor, product_id.0, revision.0, *days, reason),
+        Mutation::SetQuarantineWarehouse {
+            warehouse_id,
+            revision,
+            quarantine,
+            reason,
+        } => quarantine::set_warehouse(db, actor, warehouse_id.0, revision.0, *quarantine, reason),
+        Mutation::QuarantineTransfer {
+            date,
+            from_id,
+            to_id,
+            lines,
+            reason,
+        } => quarantine::transfer(db, actor, date, from_id.0, to_id.0, lines, reason),
+        Mutation::SaveProductPlanning { planning, reason } => {
+            purchasing::save_planning(db, actor, planning, reason)
+        }
+        Mutation::SavePricingPolicy {
+            revision,
+            minimum_margin_bps,
+            reason,
+        } => pricing::save_policy(db, actor, revision.0, *minimum_margin_bps, reason),
+        Mutation::CreateSuggestedOrders {
+            filter,
+            product_ids,
+            preview_hash,
+            reason,
+        } => purchasing::create_orders(db, actor, filter, product_ids, preview_hash, reason),
+        Mutation::ApplyPrices {
+            unit_ids,
+            rule,
+            preview_hash,
+            reason,
+        } => pricing::apply(db, actor, unit_ids, rule, preview_hash, reason),
+        Mutation::AllocateLandedCost {
+            date,
+            supplier_id,
+            description,
+            basis,
+            amount,
+            receipt_line_ids,
+            preview_hash,
+        } => purchasing::post_landed(
+            db,
+            actor,
+            date,
+            supplier_id.0,
+            description,
+            *basis,
+            amount.0,
+            receipt_line_ids,
+            preview_hash,
+        ),
+        Mutation::CloseYear {
+            period_id,
+            date,
+            preview_hash,
+            reason,
+        } => closing::post(db, actor, period_id.0, date, preview_hash, reason),
+        Mutation::ReceivableAdjustment {
+            kind,
+            date,
+            debit_line_id,
+            amount,
+            reason,
+        } => {
+            receivable_adjustments::post(db, actor, *kind, date, debit_line_id.0, amount.0, reason)
+        }
+        Mutation::SaveBankStatement { statement } => reconciliation::save(db, actor, statement),
+        Mutation::MatchStatement {
+            statement_line_id,
+            journal_line_id,
+            amount,
+            date,
+            reason,
+        } => reconciliation::post_match(
+            db,
+            actor,
+            statement_line_id.0,
+            journal_line_id.0,
+            amount.0,
+            date,
+            reason,
+        ),
+        Mutation::UnmatchStatement {
+            match_id,
+            date,
+            reason,
+        } => reconciliation::unmatch(db, actor, match_id.0, date, reason),
+        Mutation::VoidBankStatement {
+            statement_id,
+            date,
+            reason,
+        } => reconciliation::void(db, actor, statement_id.0, date, reason),
         Mutation::SaveProduct { product } => catalog::product(db, product),
         Mutation::SaveParty { party } => catalog::party(db, party),
         Mutation::SaveMaster { master } => administration::master(db, master),

@@ -30,6 +30,7 @@ export function StockRules({
             fields={[
               { name: 'min', label: 'minStock', type: 'number', digits: 6, required: true },
               { name: 'bin', label: 'bin' },
+              { name: 'shelf', label: 'shelf' },
             ]}
             initial={{
               min: editDecimal(
@@ -37,6 +38,7 @@ export function StockRules({
                 6,
               ),
               bin: s(rule, 'bin_location'),
+              shelf: s(rule, 'shelf_location'),
             }}
             onSubmit={async (v) => {
               await api.mutate({
@@ -47,6 +49,7 @@ export function StockRules({
                   product_id: s(product, 'product_id'),
                   min_stock: decimal(textValue(v, 'min'), 6),
                   bin: textValue(v, 'bin'),
+                  shelf: textValue(v, 'shelf'),
                 },
               });
               toast(t('saved'));

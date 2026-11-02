@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { api, s, type Row } from '../../api/client';
 import { t } from '../../i18n';
 import { allowed, businessDate, money, moneyDigits, toast, useStore } from '../../app/store';
@@ -22,6 +22,9 @@ import { MasterSelect } from '../../components/Pickers';
 import { ReportView } from '../reports/ReportsPage';
 import { DocumentDetail } from '../documents/DocumentDetail';
 import { FinanceDialog, type FinanceForm } from './FinanceForms';
+const ClosingPage = lazy(() => import('./ClosingPage'));
+const ReconciliationPage = lazy(() => import('./ReconciliationPage'));
+const ReceivableAdjustmentsPage = lazy(() => import('./ReceivableAdjustmentsPage'));
 export default function FinancePage() {
   const [tab, setTab] = useState('cashShifts'),
     [form, setForm] = useState<FinanceForm | null>(null),
@@ -85,6 +88,15 @@ export default function FinancePage() {
             onChange={setTab}
             items={[
               ...(allowed('cash.shift') ? [{ value: 'cashShifts', label: 'cashShifts' }] : []),
+              ...(allowed('finance.close') ? [{ value: 'yearClosing', label: 'yearClosing' }] : []),
+              ...(allowed('finance.reconcile')
+                ? [{ value: 'bankReconciliation', label: 'bankReconciliation' }]
+                : []),
+              ...(['finance.writeoff', 'finance.credit_note', 'finance.settlement_discount'].some(
+                allowed,
+              )
+                ? [{ value: 'customerAdjustments', label: 'customerAdjustments' }]
+                : []),
               ...(allowed('reports.read')
                 ? [
                     { value: 'cheques', label: 'cheques' },
@@ -94,6 +106,13 @@ export default function FinancePage() {
               ...(allowed('finance.read') ? [{ value: 'documents', label: 'journalLines' }] : []),
             ]}
           />
+          <Suspense fallback={<Loading />}>
+            {tab === 'yearClosing' && <ClosingPage onDocument={setSelected} />}
+            {tab === 'bankReconciliation' && <ReconciliationPage onDocument={setSelected} />}
+            {tab === 'customerAdjustments' && (
+              <ReceivableAdjustmentsPage onDocument={setSelected} />
+            )}
+          </Suspense>
           {tab === 'cashShifts' && (
             <>
               <div className="mb-5 grid gap-4 md:grid-cols-3">
@@ -193,6 +212,11 @@ export default function FinancePage() {
                   }}
                 >
                   {[
+                    'year_end_close',
+                    'bad_debt',
+                    'customer_credit',
+                    'settlement_discount',
+                    'bank_match',
                     'receipt_voucher',
                     'payment_voucher',
                     'expense',

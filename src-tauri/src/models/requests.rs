@@ -3,6 +3,137 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct VariantInput {
+    pub code: String,
+    pub size: String,
+    pub material: String,
+    pub barcode: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleItem {
+    pub unit_id: Int,
+    pub quantity: Int,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SalesBundle {
+    pub id: Option<Int>,
+    pub revision: Int,
+    pub code: String,
+    pub name: String,
+    pub active: bool,
+    pub items: Vec<BundleItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductPlanning {
+    pub product_id: Int,
+    pub revision: Int,
+    pub supplier_id: Option<Int>,
+    pub reorder_point: Int,
+    pub max_level: Int,
+    pub lead_time_days: u16,
+    pub weight_grams: Int,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReorderFilter {
+    pub warehouse_id: Int,
+    pub through: String,
+    pub lookback_days: u16,
+    pub coverage_days: u16,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PriceBasis {
+    Percentage,
+    CostMarkup,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PriceList {
+    Retail,
+    Wholesale,
+    Both,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriceRule {
+    pub basis: PriceBasis,
+    pub price_list: PriceList,
+    pub rate_bps: Int,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LandedBasis {
+    Value,
+    Quantity,
+    Weight,
+}
+impl LandedBasis {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::Quantity => "quantity",
+            Self::Weight => "weight",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceivableAdjustmentKind {
+    BadDebt,
+    CustomerCredit,
+    SettlementDiscount,
+}
+impl ReceivableAdjustmentKind {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::BadDebt => "bad_debt",
+            Self::CustomerCredit => "customer_credit",
+            Self::SettlementDiscount => "settlement_discount",
+        }
+    }
+    pub fn permission(self) -> &'static str {
+        match self {
+            Self::BadDebt => "finance.writeoff",
+            Self::CustomerCredit => "finance.credit_note",
+            Self::SettlementDiscount => "finance.settlement_discount",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationView {
+    Statement,
+    Journal,
+    Matches,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BankStatementLine {
+    pub date: String,
+    pub amount: Int,
+    pub reference: String,
+    pub description: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BankStatement {
+    pub cash_account_id: Int,
+    pub starts_on: String,
+    pub ends_on: String,
+    pub reference: String,
+    pub opening: Int,
+    pub closing: Int,
+    pub lines: Vec<BankStatementLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Setup {
     pub store_name: String,
     pub username: String,
@@ -256,6 +387,7 @@ pub enum Master {
         product_id: Int,
         min_stock: Int,
         bin: String,
+        shelf: Option<String>,
     },
     Sequence {
         kind: String,
@@ -309,6 +441,98 @@ pub struct Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Mutation {
+    CreateVariants {
+        template_id: Int,
+        variants: Vec<VariantInput>,
+        preview_hash: String,
+        reason: String,
+    },
+    SaveBundle {
+        bundle: SalesBundle,
+        reason: String,
+    },
+    SetWarranty {
+        product_id: Int,
+        revision: Int,
+        days: Option<u16>,
+        reason: String,
+    },
+    SetQuarantineWarehouse {
+        warehouse_id: Int,
+        revision: Int,
+        quarantine: bool,
+        reason: String,
+    },
+    QuarantineTransfer {
+        date: String,
+        from_id: Int,
+        to_id: Int,
+        lines: Vec<BundleItem>,
+        reason: String,
+    },
+    SaveProductPlanning {
+        planning: ProductPlanning,
+        reason: String,
+    },
+    SavePricingPolicy {
+        revision: Int,
+        minimum_margin_bps: u16,
+        reason: String,
+    },
+    CreateSuggestedOrders {
+        filter: ReorderFilter,
+        product_ids: Vec<Int>,
+        preview_hash: String,
+        reason: String,
+    },
+    ApplyPrices {
+        unit_ids: Vec<Int>,
+        rule: PriceRule,
+        preview_hash: String,
+        reason: String,
+    },
+    AllocateLandedCost {
+        date: String,
+        supplier_id: Int,
+        description: String,
+        basis: LandedBasis,
+        amount: Int,
+        receipt_line_ids: Vec<Int>,
+        preview_hash: String,
+    },
+    CloseYear {
+        period_id: Int,
+        date: String,
+        preview_hash: String,
+        reason: String,
+    },
+    ReceivableAdjustment {
+        kind: ReceivableAdjustmentKind,
+        date: String,
+        debit_line_id: Int,
+        amount: Int,
+        reason: String,
+    },
+    SaveBankStatement {
+        statement: BankStatement,
+    },
+    MatchStatement {
+        statement_line_id: Int,
+        journal_line_id: Int,
+        amount: Int,
+        date: String,
+        reason: String,
+    },
+    UnmatchStatement {
+        match_id: Int,
+        date: String,
+        reason: String,
+    },
+    VoidBankStatement {
+        statement_id: Int,
+        date: String,
+        reason: String,
+    },
     SaveProduct {
         product: Product,
     },
@@ -452,8 +676,96 @@ pub struct Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
+    VariantPreview {
+        template_id: Int,
+        variants: Vec<VariantInput>,
+    },
+    ProductVariants {
+        template_id: Int,
+        after_id: Int,
+        limit: u16,
+    },
+    Bundles {
+        search: String,
+        after_id: Int,
+        limit: u16,
+    },
+    Bundle {
+        id: Int,
+    },
+    ExpandBundle {
+        id: Int,
+        quantity: Int,
+        wholesale: bool,
+    },
+    ProductPlanning {
+        product_id: Int,
+    },
+    PricingPolicy,
+    SupplierPrices {
+        product_id: Int,
+        after_id: Int,
+        limit: u16,
+    },
+    ReorderSuggestions {
+        filter: ReorderFilter,
+        after_id: Int,
+        limit: u16,
+    },
+    SuggestedOrdersPreview {
+        filter: ReorderFilter,
+        product_ids: Vec<Int>,
+    },
+    PriceUnits {
+        search: String,
+        after_id: Int,
+        limit: u16,
+    },
+    PricePreview {
+        unit_ids: Vec<Int>,
+        rule: PriceRule,
+    },
+    SaleMargins {
+        warehouse_id: Int,
+        lines: Vec<DraftLine>,
+        discount: Int,
+    },
+    LandedPreview {
+        basis: LandedBasis,
+        amount: Int,
+        receipt_line_ids: Vec<Int>,
+    },
+    ClosingPreview {
+        period_id: Int,
+        date: String,
+    },
+    BankStatements {
+        after_id: Int,
+        limit: u16,
+    },
+    ParseStatementCsv {
+        csv: String,
+    },
+    Reconciliation {
+        statement_id: Int,
+        view: ReconciliationView,
+        limit: u16,
+        offset: u32,
+    },
+    CustomerOpenItems {
+        search: String,
+        after_id: Int,
+        limit: u16,
+    },
     Bootstrap,
     CashDesk,
+    StockIntegrity,
+    ReportDrilldown {
+        filter: ReportFilter,
+        key: String,
+        limit: u16,
+        offset: u32,
+    },
     PrintSnapshot {
         source: PrintSource,
     },
@@ -510,6 +822,15 @@ pub enum Query {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Report {
+    BalanceSheet,
+    InventoryReconciliation,
+    StockAbc,
+    StockActivity,
+    StockAging,
+    StockTurnover,
+    DiscountsGranted,
+    VatReturn,
+    Collections,
     TrialBalance,
     IncomeStatement,
     CashFlow,
@@ -527,6 +848,15 @@ pub enum Report {
     PurchaseOrders,
     OpenItems,
     CashShifts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportFilter {
+    pub report: Report,
+    pub from: String,
+    pub to: String,
+    pub party_id: Option<Int>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -222,7 +222,22 @@ fn match_source(db: &Connection, doc: i64, source: i64) -> Result<()> {
 }
 pub fn reverse(db: &Connection, a: &Actor, source: i64, day: &str, reason: &str) -> Result<Value> {
     ensure(!reason.trim().is_empty(), "سبب العكس مطلوب")?;
+    if db.query_row("SELECT EXISTS(SELECT 1 FROM stock_movements s JOIN warehouses w ON w.id=s.warehouse_id WHERE s.document_id=?1 AND s.quantity_micros>0 AND w.is_quarantine=1) OR EXISTS(SELECT 1 FROM quarantine_transfers WHERE document_id=?1)",[source],|r|r.get::<_,bool>(0))? {
+        a.require("inventory.quarantine")?;
+    }
     let(kind,party,warehouse,original_day):(String,Option<i64>,Option<i64>,String)=db.query_row("SELECT kind,party_id,warehouse_id,document_date FROM documents WHERE id=?1 AND status='posted'",[source],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    match kind.as_str() {
+        "year_end_close" => super::closing::allow_reverse(db, a, source, day)?,
+        "bad_debt" => a.require("finance.writeoff")?,
+        "customer_credit" => a.require("finance.credit_note")?,
+        "settlement_discount" => a.require("finance.settlement_discount")?,
+        "bank_match" => {
+            return Err(crate::error::Error::validation(
+                "استخدم إلغاء المطابقة أو إلغاء الكشف",
+            ));
+        }
+        _ => {}
+    }
     ensure(
         kind != "reversal" && day >= original_day.as_str(),
         "المستند أو تاريخ العكس غير صالح",

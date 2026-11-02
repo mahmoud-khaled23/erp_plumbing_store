@@ -342,6 +342,10 @@ pub fn post(db: &Connection, a: &Actor, id: i64, reason: &str, ack: bool) -> Res
     )?;
     ensure(paid <= total, "الدفعات تتجاوز قيمة الفاتورة")?;
     if kind == "sale" {
+        super::quarantine::sale_warehouse(
+            db,
+            warehouse.ok_or_else(|| Error::validation("المخزن مطلوب"))?,
+        )?;
         ensure(
             party.is_some() || paid == total,
             "البيع الآجل يحتاج إلى عميل",
@@ -349,6 +353,16 @@ pub fn post(db: &Connection, a: &Actor, id: i64, reason: &str, ack: bool) -> Res
         if let Some(p) = party {
             super::finance::credit_check(db, a, p, total - paid, reason, ack)?;
         }
+        if !reason.trim().is_empty() {
+            ensure(reason.len() <= 2000, "سبب تجاوز السعر طويل")?;
+            db.execute(
+                "UPDATE documents SET reason=?1 WHERE id=?2",
+                params![reason, id],
+            )?;
+        }
+    }
+    if kind == "transfer" {
+        super::quarantine::transfer_guard(db, a, id)?;
     }
     begin(db, id)?;
     let mut journal = Journal::default();
@@ -376,6 +390,7 @@ pub fn post(db: &Connection, a: &Actor, id: i64, reason: &str, ack: bool) -> Res
                     l.qty,
                     "sale",
                 )?;
+                super::pricing::enforce(db, a, id, &l, cost)?;
                 journal.add(Entry::item(
                     super::finance::account(db, "cogs")?,
                     cost,
@@ -565,6 +580,7 @@ fn clone_draft(db: &Connection, a: &Actor, source: i64, day: &str, kind: &str) -
         params![source, id],
     )?;
     db.execute("INSERT INTO document_lines(document_id,line_number,product_id,product_unit_id,product_code_snapshot,product_name_snapshot,unit_name_snapshot,category_id_snapshot,factor_numerator,factor_denominator,quantity_micros,base_quantity_micros,unit_price_minor,subtotal_minor,line_discount_minor,invoice_discount_share_minor,tax_rate_bps,tax_minor,total_minor,notes) SELECT ?1,line_number,product_id,product_unit_id,product_code_snapshot,product_name_snapshot,unit_name_snapshot,category_id_snapshot,factor_numerator,factor_denominator,quantity_micros,base_quantity_micros,unit_price_minor,subtotal_minor,line_discount_minor,invoice_discount_share_minor,tax_rate_bps,tax_minor,total_minor,notes FROM document_lines WHERE document_id=?2",params![id,source])?;
+    db.execute("UPDATE document_lines SET warranty_days=(SELECT original.warranty_days FROM document_lines original WHERE original.document_id=?1 AND original.line_number=document_lines.line_number) WHERE document_id=?2",params![source,id])?;
     totals(db, id)?;
     Ok(json!({"id":Int(id),"status":"draft","revision":"0"}))
 }

@@ -28,6 +28,14 @@ def execute_sql(connection, source):
         connection.execute(buffer)
 
 
+def copy_fixture_rows(source, target, table):
+    # Build old-version fixtures from only columns that existed in that version.
+    columns = ",".join('"' + row[1] + '"' for row in target.execute(f'PRAGMA table_info("{table}")'))
+    rows = source.execute(f"SELECT {columns} FROM {table}").fetchall()
+    if rows:
+        target.executemany(f"INSERT INTO {table} ({columns}) VALUES ({','.join('?' for _ in rows[0])})", rows)
+
+
 def migrate(connection):
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA recursive_triggers = ON")
@@ -374,6 +382,78 @@ class SchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(sqlite3.IntegrityError, "فاتورة المورد"):
             self.finish(duplicate)
 
+    def test_supplier_price_history_upgrade_backfills_without_rewriting_posted_history(self):
+        original = self.db
+        with closing(sqlite3.connect(":memory:", isolation_level=None)) as old:
+            old.execute("PRAGMA foreign_keys=ON")
+            old.execute("PRAGMA recursive_triggers=ON")
+            for path in sorted(MIGRATIONS.glob("*.sql")):
+                if int(path.name.split("_")[0]) >= 12:
+                    break
+                execute_sql(old, path.read_text(encoding="utf-8"))
+            for table in ("users", "fiscal_periods", "parties", "products", "product_units"):
+                copy_fixture_rows(original, old, table)
+            self.db = old
+            try:
+                receipt = self.doc("goods_receipt", 3000)
+                received = self.line(receipt, 3000000, 3000)
+                old.execute("INSERT INTO receipt_lines(document_line_id) VALUES (?)", (received,))
+                self.start(receipt)
+                self.stock(receipt, received, 3000000, 3000, "receipt")
+                self.journal(receipt, [(120, 3000, 0), (210, 0, 3000)])
+                self.finish(receipt)
+                invoice = self.doc("purchase", 3000)
+                billed = self.line(invoice, 3000000, 3000)
+                old.execute("INSERT INTO purchase_matches(invoice_line_id,receipt_line_id,base_quantity_micros,accrued_value_minor) VALUES (?,?,3000000,3000)", (billed, received))
+                self.start(invoice)
+                self.journal(invoice, [(210, 3000, 0), (201, 0, 3000)])
+                self.finish(invoice)
+                tables = ("documents", "document_lines", "stock_movements", "stock_balances", "journal_lines")
+                before = {t: old.execute(f"SELECT * FROM {t}").fetchall() for t in tables}
+                old.execute("BEGIN IMMEDIATE")
+                execute_sql(old, (MIGRATIONS / "0012_purchasing_pricing.sql").read_text(encoding="utf-8"))
+                old.execute("COMMIT")
+                self.assertEqual(old.execute("SELECT purchase_line_id,document_id,net_minor,base_quantity_micros FROM supplier_price_history").fetchall(), [(billed, invoice, 3000, 3000000)])
+                for table in tables:
+                    self.assertEqual(old.execute(f"SELECT * FROM {table}").fetchall(), before[table])
+                self.assertEqual(old.execute("PRAGMA foreign_key_check").fetchall(), [])
+            finally:
+                self.db = original
+
+    def test_plumbing_upgrade_preserves_posted_values_and_does_not_invent_warranties(self):
+        original = self.db
+        with closing(sqlite3.connect(":memory:", isolation_level=None)) as old:
+            old.execute("PRAGMA foreign_keys=ON")
+            old.execute("PRAGMA recursive_triggers=ON")
+            for path in sorted(MIGRATIONS.glob("*.sql")):
+                if int(path.name.split("_")[0]) >= 13:
+                    break
+                execute_sql(old, path.read_text(encoding="utf-8"))
+            for table in ("users", "fiscal_periods", "parties", "products", "product_units"):
+                copy_fixture_rows(original, old, table)
+            self.db = old
+            try:
+                self.opening()
+                self.sale()
+                tables = ("documents", "document_lines", "stock_movements", "stock_balances", "journal_lines", "products", "warehouses", "users")
+                columns = {table: ",".join('"' + r[1] + '"' for r in old.execute(f'PRAGMA table_info("{table}")')) for table in tables}
+                before = {table: old.execute(f"SELECT {columns[table]} FROM {table}").fetchall() for table in tables}
+                old.execute("BEGIN IMMEDIATE")
+                execute_sql(old, (MIGRATIONS / "0013_plumbing_inventory.sql").read_text(encoding="utf-8"))
+                old.execute("COMMIT")
+                for table in tables:
+                    self.assertEqual(old.execute(f"SELECT {columns[table]} FROM {table}").fetchall(), before[table])
+                self.assertEqual(old.execute("SELECT COUNT(*) FROM document_lines WHERE warranty_days IS NOT NULL").fetchone()[0], 0)
+                self.assertEqual(old.execute("SELECT COUNT(*) FROM warehouses WHERE is_quarantine<>0").fetchone()[0], 0)
+                old.execute("UPDATE products SET warranty_days=365 WHERE id=1")
+                draft = self.doc("sale", 1500)
+                line = self.line(draft)
+                self.assertEqual(old.execute("SELECT warranty_days FROM document_lines WHERE id=?", (line,)).fetchone()[0], 365)
+                self.assertEqual(old.execute("SELECT COUNT(*) FROM document_lines l JOIN documents d ON d.id=l.document_id WHERE d.status='posted' AND l.warranty_days IS NOT NULL").fetchone()[0], 0)
+                self.assertEqual(old.execute("PRAGMA foreign_key_check").fetchall(), [])
+            finally:
+                self.db = original
+
     def test_partial_purchase_order_receipt_and_over_receipt(self):
         order = self.doc("purchase_order", 5000)
         order_line = self.line(order, 5000000, 5000)
@@ -439,6 +519,99 @@ class SchemaTest(unittest.TestCase):
         line = self.line(draft)
         with self.assertRaises(sqlite3.IntegrityError):
             self.db.execute("UPDATE document_lines SET document_id = ?, line_number = 2 WHERE id = ?", (original, line))
+
+    def test_balance_cache_backfills_version_eight_without_changing_history(self):
+        current = self.db
+        old = sqlite3.connect(":memory:", isolation_level=None)
+        old.execute("PRAGMA foreign_keys=ON")
+        for path in sorted(MIGRATIONS.glob("*.sql"))[:8]:
+            execute_sql(old, path.read_text(encoding="utf-8"))
+        for table in ["users", "fiscal_periods", "parties", "products", "product_units"]:
+            copy_fixture_rows(current, old, table)
+        self.db = old
+        try:
+            self.opening()
+            self.sale()
+            before = old.execute("SELECT * FROM stock_movements ORDER BY id").fetchall()
+            old.execute("BEGIN IMMEDIATE")
+            execute_sql(old, (MIGRATIONS / "0009_stock_balances.sql").read_text(encoding="utf-8"))
+            old.execute("COMMIT")
+            self.assertEqual(old.execute("SELECT * FROM stock_movements ORDER BY id").fetchall(), before)
+            self.assertEqual(old.execute("SELECT * FROM stock_balances").fetchall(), [(1, 1, 8000000, 8000, 2)])
+            self.sale()
+            self.assertEqual(old.execute("SELECT * FROM stock_balances").fetchall(), [(1, 1, 6000000, 6000, 3)])
+        finally:
+            self.db = current
+            old.close()
+
+    def test_balance_cache_rolls_back_savepoints_and_multirow_insert_failure(self):
+        self.opening()
+        original = self.db.execute("SELECT * FROM stock_balances").fetchall()
+        doc = self.doc("adjustment", reason="تسوية")
+        self.start(doc)
+        self.db.execute("SAVEPOINT preview")
+        self.stock(doc, None, 1000000, 1000, "adjustment")
+        self.assertNotEqual(self.db.execute("SELECT * FROM stock_balances").fetchall(), original)
+        self.db.execute("ROLLBACK TO preview")
+        self.db.execute("RELEASE preview")
+        self.assertEqual(self.db.execute("SELECT * FROM stock_balances").fetchall(), original)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "الرصيد غير كاف"):
+            self.db.execute("""INSERT INTO stock_movements(document_id,product_id,warehouse_id,
+                movement_type,quantity_micros,value_minor,unit_cost_micropiastres,created_by)
+                VALUES (?,1,1,'adjustment',-8000000,-8000,1000000000,1),
+                       (?,1,1,'adjustment',-8000000,-8000,1000000000,1)""", (doc, doc))
+        self.assertEqual(self.db.execute("SELECT * FROM stock_balances").fetchall(), original)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0], 1)
+
+    def test_balance_cache_rejects_integer_overflow_before_sqlite_real_promotion(self):
+        self.opening()
+        self.db.execute("UPDATE store_settings SET allow_negative_stock=1")
+        doc = self.doc("adjustment", reason="اختبار الحدود")
+        self.start(doc)
+        # Simulate an existing pool at each i64 boundary. No runtime API writes it.
+        for column in ["quantity_micros", "value_minor"]:
+            for boundary, sign in [(2**63-1, 1), (-2**63, -1)]:
+                with self.subTest(column=column, boundary=boundary):
+                    self.db.execute("SAVEPOINT overflow")
+                    self.db.execute(f"UPDATE stock_balances SET {column}=?", (boundary,))
+                    before = self.db.execute("SELECT * FROM stock_balances").fetchall()
+                    with self.assertRaisesRegex(sqlite3.IntegrityError, "الحدود الرقمية"):
+                        self.stock(doc, None, sign, sign, "adjustment")
+                    self.assertEqual(self.db.execute("SELECT * FROM stock_balances").fetchall(), before)
+                    self.assertEqual(self.db.execute("SELECT COUNT(*) FROM stock_movements").fetchone()[0], 1)
+                    self.db.execute("ROLLBACK TO overflow")
+                    self.db.execute("RELEASE overflow")
+
+    def test_zero_pool_retains_date_guard_and_revaluation_advances_high_water(self):
+        self.opening()
+        self.sale(quantity=10000000, amount=15000, cost=10000)
+        zero = self.db.execute("SELECT * FROM stock_balances").fetchone()
+        self.assertEqual(zero, (1, 1, 0, 0, 2))
+        backdated = self.doc("adjustment", reason="تسوية", document_date="2026-10-26")
+        self.start(backdated)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "أقدم"):
+            self.stock(backdated, None, 1, 1, "adjustment")
+        doc = self.doc("cost_adjustment", document_date="2026-10-28")
+        self.start(doc)
+        movement = self.stock(doc, None, 0, 1, "revaluation")
+        self.assertEqual(self.db.execute("SELECT * FROM stock_balances").fetchone(), (1, 1, 0, 1, movement))
+        yesterday = self.doc("adjustment", reason="تسوية")
+        self.start(yesterday)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "أقدم"):
+            self.stock(yesterday, None, 1, 1, "adjustment")
+
+    def test_balance_cache_rejects_out_of_order_movement_ids(self):
+        self.opening()
+        doc = self.doc("adjustment", reason="تسوية")
+        self.start(doc)
+        self.db.execute("""INSERT INTO stock_movements(id,document_id,product_id,warehouse_id,
+            movement_type,quantity_micros,value_minor,unit_cost_micropiastres,created_by)
+            VALUES (10,?,1,1,'adjustment',1,1,1,1)""", (doc,))
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "تسلسل"):
+            self.db.execute("""INSERT INTO stock_movements(id,document_id,product_id,warehouse_id,
+                movement_type,quantity_micros,value_minor,unit_cost_micropiastres,created_by)
+                VALUES (5,?,1,1,'adjustment',1,1,1,1)""", (doc,))
+        self.assertEqual(self.db.execute("SELECT last_movement_id FROM stock_balances").fetchone()[0], 10)
 
     def test_cancelled_reversal_does_not_block_new_reversal(self):
         original = self.opening()

@@ -239,3 +239,58 @@ test('goods receipt, whole report beyond one UI page, and printable barcode labe
   await capture(page, 'barcode-labels');
   await expect(page.locator('.barcode-label svg')).toHaveCount(30);
 });
+
+test('Stage 2 reports drill into posted journals and print Arabic analysis layouts', async ({
+  page,
+  backend,
+}) => {
+  const ids = await seed(backend);
+  const draft = makeDraft('sale', ids.unit, { party_id: ids.party, due_date: day, discount: '25' });
+  draft.lines[0].discount = '10';
+  const sale = await post(backend, draft);
+  const detail = await backend.query<DocumentDetail>({ type: 'document', id: sale });
+  await page.goto('/');
+  await nav(page, 'التقارير');
+  const select = page.getByRole('combobox', { name: 'التقرير', exact: true });
+  for (const report of [
+    'balance_sheet',
+    'inventory_reconciliation',
+    'stock_abc',
+    'stock_activity',
+    'stock_aging',
+    'stock_turnover',
+    'discounts_granted',
+    'vat_return',
+    'collections',
+  ]) {
+    await select.selectOption(report);
+    await expect(page.getByRole('button', { name: 'طباعة التقرير', exact: true })).toBeEnabled();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'تصدير CSV', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'تصدير Excel', exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'تفاصيل التقرير', exact: true }).first(),
+    ).toBeVisible();
+    if (report === 'discounts_granted') {
+      await page.getByRole('button', { name: 'تفاصيل التقرير', exact: true }).first().click();
+      const dialog = page.getByRole('dialog', { name: 'تفاصيل التقرير', exact: true });
+      await dialog.getByRole('button', { name: 'عرض المستند والقيد', exact: true }).first().click();
+      await expect(
+        dialog.getByRole('cell', { name: detail.header[0].number!, exact: true }),
+      ).toBeVisible();
+      await expect(dialog.getByText('بنود القيد', { exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'ترحيل', exact: true })).toHaveCount(0);
+      await dialog.getByRole('button', { name: 'إغلاق', exact: true }).click();
+    }
+    await page.getByRole('button', { name: 'طباعة التقرير', exact: true }).click();
+    await capture(page, `report-${report}`);
+    await page.getByRole('button', { name: 'إغلاق المعاينة' }).click();
+  }
+  const stock = await backend.query<Row[]>({
+    type: 'inventory',
+    warehouse_id: '1',
+    after_id: '0',
+    limit: 10,
+  });
+  expect(stock[0].quantity_micros).toBe('99000000');
+});

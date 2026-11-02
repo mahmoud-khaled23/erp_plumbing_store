@@ -122,6 +122,7 @@ pub async fn erp_import_opening_apply(
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FileAction {
     ExportProducts { excel: bool },
+    ExportReport { filter: ReportFilter, excel: bool },
     ImportProducts,
     ImportOpening { balances: bool },
     Backup,
@@ -137,9 +138,10 @@ pub async fn erp_file(
 ) -> Result<Value> {
     let app = app.inner().clone();
     blocking(move||{
-        {let mut inner=app.lock()?;let actor=App::actor(&mut inner)?;actor.require(match action{FileAction::ExportProducts{..}=>"products.read",FileAction::ImportProducts=>"products.import",FileAction::ImportOpening{balances}=>if balances{"finance.write"}else{"inventory.adjust"},FileAction::Backup=>"backup.create",FileAction::BackupDirectory=>"settings.write",FileAction::Restore=>"backup.restore",FileAction::Image{product_id}=>if product_id.is_some(){"products.write"}else{"settings.write"}})?;}
-        let selected=match action{
-            FileAction::ExportProducts{excel}=>handle.dialog().file().set_title("تصدير الأصناف").add_filter("ملف الأصناف",if excel{&["xlsx"]}else{&["csv"]}).set_file_name(if excel{"products.xlsx"}else{"products.csv"}).blocking_save_file(),
+        {let mut inner=app.lock()?;let actor=App::actor(&mut inner)?;actor.require(match &action{FileAction::ExportReport{..}=>"reports.export",FileAction::ExportProducts{..}=>"products.read",FileAction::ImportProducts=>"products.import",FileAction::ImportOpening{balances}=>if *balances{"finance.write"}else{"inventory.adjust"},FileAction::Backup=>"backup.create",FileAction::BackupDirectory=>"settings.write",FileAction::Restore=>"backup.restore",FileAction::Image{product_id}=>if product_id.is_some(){"products.write"}else{"settings.write"}})?;}
+        let selected=match &action{
+            FileAction::ExportReport{excel,..}=>handle.dialog().file().set_title(crate::services::reports::label("exportReport")).add_filter(crate::services::reports::label("reportFile"),if *excel{&["xlsx"]}else{&["csv"]}).set_file_name(if *excel{"report.xlsx"}else{"report.csv"}).blocking_save_file(),
+            FileAction::ExportProducts{excel}=>handle.dialog().file().set_title("تصدير الأصناف").add_filter("ملف الأصناف",if *excel{&["xlsx"]}else{&["csv"]}).set_file_name(if *excel{"products.xlsx"}else{"products.csv"}).blocking_save_file(),
             FileAction::ImportProducts=>handle.dialog().file().set_title("معاينة استيراد الأصناف").add_filter("CSV وExcel",&["csv","xlsx","xls"]).blocking_pick_file(),
             FileAction::ImportOpening{..}=>handle.dialog().file().set_title("معاينة الأرصدة الافتتاحية").add_filter("CSV وExcel",&["csv","xlsx","xls"]).blocking_pick_file(),
             FileAction::BackupDirectory=>handle.dialog().file().set_title("مجلد النسخ الاحتياطي اليومي").blocking_pick_folder(),
@@ -149,6 +151,7 @@ pub async fn erp_file(
         };
         let Some(path)=selected else{return Ok(json!({"cancelled":true}));};let path=path.into_path().map_err(|_|Error::validation("اختر ملفاً محلياً"))?;
         match action{
+            FileAction::ExportReport{filter,excel}=>app.export_report(&path,&filter,excel),
             FileAction::ExportProducts{excel}=>app.export_products(&path,excel),FileAction::ImportProducts=>app.preview_products(&path),FileAction::Backup=>app.backup(&path),FileAction::Image{product_id}=>app.attach_image(&path,product_id),
             FileAction::ImportOpening{balances}=>app.preview_opening(&path,balances),FileAction::BackupDirectory=>app.set_backup_directory(&path),
             FileAction::Restore=>{if !handle.dialog().message("ستُستبدل بيانات المتجر بالنسخة المحددة مع حفظ نسخة من البيانات الحالية. هل تريد المتابعة؟").title("تأكيد الاستعادة").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancel).blocking_show(){return Ok(json!({"cancelled":true}));}app.restore(&path)}

@@ -1,7 +1,15 @@
 import { invoke, isTauri, convertFileSrc } from '@tauri-apps/api/core';
 import { appLocalDataDir, join } from '@tauri-apps/api/path';
 import { z } from 'zod';
-import type { Query, Mutation, Setup, Product, PrintSource, PrintPaper } from './contracts';
+import type {
+  Query,
+  Mutation,
+  Setup,
+  Product,
+  PrintSource,
+  PrintPaper,
+  ReportFilter,
+} from './contracts';
 import { t } from '../i18n';
 
 const rowSchema = z.record(z.string(), z.string().nullable());
@@ -43,12 +51,14 @@ const documentSchema = z.object({
   settlements: rowsSchema.default([]),
   availability: rowsSchema.default([]),
   returned: rowsSchema.default([]),
+  finance_context: rowsSchema.optional(),
 });
 export type DocumentDetail = z.infer<typeof documentSchema>;
 const printSnapshotSchema = z.object({
   document: documentSchema.nullable(),
   rows: rowsSchema,
   opening: rowsSchema,
+  summary: rowsSchema.default([]),
   context: rowsSchema,
   store: rowSchema,
   preferences: rowSchema,
@@ -82,25 +92,61 @@ export type DashboardData = z.infer<typeof dashboardSchema>;
 const usersSchema = z.object({ users: rowsSchema, roles: rowsSchema, user_roles: rowsSchema });
 export type UsersData = z.infer<typeof usersSchema>;
 const cashDeskSchema = z.object({ shifts: rowsSchema, balances: rowsSchema });
-export type ReportData = Row[] | { rows: Row[]; opening: Row[] };
-export type QueryResult<Q extends Query> = Q extends { type: 'bootstrap' }
-  ? Bootstrap
-  : Q extends { type: 'print_snapshot' }
-    ? PrintSnapshot
-    : Q extends { type: 'product' }
-      ? ProductDetail
-      : Q extends { type: 'document' }
-        ? DocumentDetail
-        : Q extends { type: 'dashboard' }
-          ? DashboardData
-          : Q extends { type: 'users' }
-            ? UsersData
-            : Q extends { type: 'report' }
-              ? ReportData
-              : Q extends { type: 'cash_desk' }
-                ? z.infer<typeof cashDeskSchema>
-                : Row[];
+const stockIntegritySchema = z.object({
+  pools: z.string().regex(/^\d+$/),
+  movements: z.string().regex(/^\d+$/),
+});
+export type ReportData = Row[] | { rows: Row[]; opening: Row[]; summary: Row[] };
+const reportDrilldownSchema = z.object({ rows: rowsSchema, columns: z.array(z.string()) });
+const closingSchema = z.object({
+  rows: rowsSchema,
+  preview_hash: z.string(),
+  result_minor: z.string(),
+});
+const reconciliationSchema = z.object({ rows: rowsSchema, summary: rowsSchema });
+const previewSchema = z.object({ rows: rowsSchema, preview_hash: z.string() });
+const bundleSchema = z.object({ header: rowsSchema, items: rowsSchema });
+const expandedBundleSchema = z.object({ rows: rowsSchema, total_minor: z.string() });
+export type BundleDetail = z.infer<typeof bundleSchema>;
+export type ExpandedBundle = z.infer<typeof expandedBundleSchema>;
+export type CalculationPreview = z.infer<typeof previewSchema>;
+export type ClosingPreview = z.infer<typeof closingSchema>;
+export type QueryResult<Q extends Query> = Q extends {
+  type: 'suggested_orders_preview' | 'price_preview' | 'landed_preview' | 'variant_preview';
+}
+  ? CalculationPreview
+  : Q extends { type: 'bundle' }
+    ? BundleDetail
+    : Q extends { type: 'expand_bundle' }
+      ? ExpandedBundle
+      : Q extends { type: 'closing_preview' }
+        ? ClosingPreview
+        : Q extends { type: 'reconciliation' }
+          ? z.infer<typeof reconciliationSchema>
+          : Q extends { type: 'bootstrap' }
+            ? Bootstrap
+            : Q extends { type: 'report_drilldown' }
+              ? z.infer<typeof reportDrilldownSchema>
+              : Q extends { type: 'stock_integrity' }
+                ? z.infer<typeof stockIntegritySchema>
+                : Q extends { type: 'print_snapshot' }
+                  ? PrintSnapshot
+                  : Q extends { type: 'product' }
+                    ? ProductDetail
+                    : Q extends { type: 'document' }
+                      ? DocumentDetail
+                      : Q extends { type: 'dashboard' }
+                        ? DashboardData
+                        : Q extends { type: 'users' }
+                          ? UsersData
+                          : Q extends { type: 'report' }
+                            ? ReportData
+                            : Q extends { type: 'cash_desk' }
+                              ? z.infer<typeof cashDeskSchema>
+                              : Row[];
 export interface Operation {
+  product_ids?: string[];
+  document_ids?: string[];
   id?: string;
   revision?: string;
   status?: string;
@@ -117,6 +163,7 @@ export interface Operation {
 }
 export type FileAction =
   | { type: 'export_products'; excel: boolean }
+  | { type: 'export_report'; filter: ReportFilter; excel: boolean }
   | { type: 'import_products' }
   | { type: 'import_opening'; balances: boolean }
   | { type: 'backup' }
@@ -151,24 +198,49 @@ const pending = new Map<string, string>();
 export const api = {
   async query<Q extends Query>(query: Q): Promise<QueryResult<Q>> {
     const result = await call<unknown>('erp_query', { query });
-    const schema =
-      query.type === 'print_snapshot'
-        ? printSnapshotSchema
-        : query.type === 'bootstrap'
-          ? bootstrapSchema
-          : query.type === 'document'
-            ? documentSchema
-            : query.type === 'product'
-              ? productSchema
-              : query.type === 'dashboard'
-                ? dashboardSchema
-                : query.type === 'users'
-                  ? usersSchema
-                  : query.type === 'cash_desk'
-                    ? cashDeskSchema
-                    : query.type === 'report'
-                      ? z.union([rowsSchema, z.object({ rows: rowsSchema, opening: rowsSchema })])
-                      : rowsSchema;
+    const schema = [
+      'suggested_orders_preview',
+      'price_preview',
+      'landed_preview',
+      'variant_preview',
+    ].includes(query.type)
+      ? previewSchema
+      : query.type === 'bundle'
+        ? bundleSchema
+        : query.type === 'expand_bundle'
+          ? expandedBundleSchema
+          : query.type === 'closing_preview'
+            ? closingSchema
+            : query.type === 'reconciliation'
+              ? reconciliationSchema
+              : query.type === 'report_drilldown'
+                ? reportDrilldownSchema
+                : query.type === 'stock_integrity'
+                  ? stockIntegritySchema
+                  : query.type === 'print_snapshot'
+                    ? printSnapshotSchema
+                    : query.type === 'bootstrap'
+                      ? bootstrapSchema
+                      : query.type === 'document'
+                        ? documentSchema
+                        : query.type === 'product'
+                          ? productSchema
+                          : query.type === 'dashboard'
+                            ? dashboardSchema
+                            : query.type === 'users'
+                              ? usersSchema
+                              : query.type === 'cash_desk'
+                                ? cashDeskSchema
+                                : query.type === 'report'
+                                  ? z.union([
+                                      rowsSchema,
+                                      z.object({
+                                        rows: rowsSchema,
+                                        opening: rowsSchema,
+                                        summary: rowsSchema.default([]),
+                                      }),
+                                    ])
+                                  : rowsSchema;
     const parsed = schema.safeParse(result);
     if (!parsed.success) throw new ApiError('contract', t('unexpected'));
     return parsed.data as QueryResult<Q>;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { StockRules } from './StockRules';
 import { api, s, type Row, type DocumentDetail as Detail } from '../../api/client';
 import { t } from '../../i18n';
@@ -23,6 +23,31 @@ import { MasterSelect, ProductSearch } from '../../components/Pickers';
 import { DocumentEditor } from '../documents/DocumentEditor';
 import { DocumentDetail } from '../documents/DocumentDetail';
 import { openPrint } from '../printing/store';
+const QuarantineDialog = lazy(() => import('./QuarantineDialog'));
+
+function StockIntegrity({ onClose }: { onClose: () => void }) {
+  const check = useQuery({ type: 'stock_integrity' });
+  return (
+    <Modal title="stockIntegrity" onClose={onClose} busy={check.loading}>
+      <p className="mb-4 text-sm text-slate-500">{t('stockIntegrityHint')}</p>
+      {check.error ? (
+        <ErrorState error={check.error} />
+      ) : !check.data ? (
+        <Loading />
+      ) : (
+        <div role="status" className="space-y-3">
+          <p className="font-bold text-emerald-700">{t('stockIntegritySuccess')}</p>
+          <p>
+            {t('checkedPools')}: <bdi>{formatDecimal(check.data.pools, 0)}</bdi>
+          </p>
+          <p>
+            {t('checkedMovements')}: <bdi>{formatDecimal(check.data.movements, 0)}</bdi>
+          </p>
+        </div>
+      )}
+    </Modal>
+  );
+}
 
 function StockCard({
   row,
@@ -370,7 +395,7 @@ export default function InventoryPage() {
   const [warehouse, setWarehouse] = useState('1'),
     [tab, setTab] = useState<'inventory' | 'stocktake' | 'transfer' | 'opening_stock'>('inventory'),
     [cursors, setCursors] = useState(['0']),
-    [dialog, setDialog] = useState<'adjust' | 'count' | null>(null),
+    [dialog, setDialog] = useState<'adjust' | 'count' | 'integrity' | 'quarantine' | null>(null),
     [card, setCard] = useState<Row | null>(null),
     [rules, setRules] = useState<Row | null>(null),
     [selected, setSelected] = useState<string | null>(null),
@@ -394,6 +419,12 @@ export default function InventoryPage() {
   return (
     <>
       <PageHeader title="inventory" hint="inventoryHint">
+        {allowed('inventory.quarantine') && (
+          <Button onClick={() => setDialog('quarantine')}>{t('quarantineWorkflow')}</Button>
+        )}
+        {allowed('inventory.verify') && (
+          <Button onClick={() => setDialog('integrity')}>{t('stockIntegrity')}</Button>
+        )}
         {allowed('inventory.adjust') && (
           <>
             <Button onClick={() => setDialog('adjust')}>{t('adjustment')}</Button>
@@ -505,7 +536,16 @@ export default function InventoryPage() {
               rows={tab === 'inventory' ? (inventory.data ?? []) : (list.data ?? [])}
               columns={
                 tab === 'inventory'
-                  ? ['code', 'name_ar', 'quantity_micros', 'value_minor']
+                  ? [
+                      'code',
+                      'name_ar',
+                      'quantity_micros',
+                      'available_quantity_micros',
+                      'quarantine_quantity_micros',
+                      'value_minor',
+                      'shelf_location',
+                      'bin_location',
+                    ]
                   : ['number', 'document_date', 'status', 'reason']
               }
               onRow={tab !== 'inventory' ? (r) => open(s(r, 'id')) : undefined}
@@ -539,6 +579,12 @@ export default function InventoryPage() {
           />
         </Panel>
       )}
+      {dialog === 'integrity' && <StockIntegrity onClose={() => setDialog(null)} />}
+      <Suspense fallback={<Loading />}>
+        {dialog === 'quarantine' && (
+          <QuarantineDialog onClose={() => setDialog(null)} onDocument={open} />
+        )}
+      </Suspense>
       {dialog === 'adjust' && (
         <Adjustment warehouse={warehouse} onClose={() => setDialog(null)} onDone={open} />
       )}{' '}

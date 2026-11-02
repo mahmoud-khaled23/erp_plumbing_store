@@ -4,6 +4,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+mod stock;
+pub use stock::verify_stock_balances;
+
 pub const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0001_foundation.sql",
@@ -36,6 +39,26 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0008_cost_attribution.sql",
         include_str!("../../migrations/0008_cost_attribution.sql"),
+    ),
+    (
+        "0009_stock_balances.sql",
+        include_str!("../../migrations/0009_stock_balances.sql"),
+    ),
+    (
+        "0010_report_access.sql",
+        include_str!("../../migrations/0010_report_access.sql"),
+    ),
+    (
+        "0011_period_close_reconciliation.sql",
+        include_str!("../../migrations/0011_period_close_reconciliation.sql"),
+    ),
+    (
+        "0012_purchasing_pricing.sql",
+        include_str!("../../migrations/0012_purchasing_pricing.sql"),
+    ),
+    (
+        "0013_plumbing_inventory.sql",
+        include_str!("../../migrations/0013_plumbing_inventory.sql"),
     ),
 ];
 pub fn digest(bytes: &[u8]) -> String {
@@ -152,7 +175,17 @@ pub fn integrity(db: &Connection, full: bool) -> Result<()> {
             .next()?
             .is_none(),
         "العلاقات المرجعية غير سليمة",
-    )
+    )?;
+    // Pre-migration backups of versions 1–8 intentionally have no balance cache.
+    // A version-9 database with a missing table must fail, never skip verification.
+    if db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version>=9)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        verify_stock_balances(db)?;
+    }
+    Ok(())
 }
 pub fn rows(db: &Connection, sql: &str, params: impl Params) -> Result<Vec<Value>> {
     let mut statement = db.prepare(sql)?;

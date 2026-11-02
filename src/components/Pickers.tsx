@@ -37,6 +37,9 @@ export function MasterSelect({
         {list.map((r) => (
           <option value={s(r, 'id')} key={s(r, 'id')}>
             {s(r, 'name_ar', s(r, 'name'))}
+            {table === 'warehouses' && r.is_quarantine === '1'
+              ? ` (${t('quarantineWarehouseTag')})`
+              : ''}
           </option>
         ))}
       </Select>
